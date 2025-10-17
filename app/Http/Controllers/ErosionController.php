@@ -258,18 +258,66 @@ class ErosionController extends Controller
      */
     public function getDistricts(Request $request): JsonResponse
     {
-        $request->validate([
-            'region_id' => 'required|integer|exists:regions,id',
-        ]);
-
-        $districts = District::where('region_id', $request->region_id)
-            ->select('id', 'name_en', 'name_tj', 'code', 'area_km2')
+        $regionId = $request->input('region_id');
+        
+        $query = District::query();
+        
+        if ($regionId) {
+            $request->validate([
+                'region_id' => 'integer|exists:regions,id',
+            ]);
+            $query->where('region_id', $regionId);
+        }
+        
+        $districts = $query
+            ->select('id', 'region_id', 'name_en', 'name_tj', 'code', 'area_km2', 'geometry')
             ->orderBy('name_en')
             ->get();
 
         return response()->json([
             'success' => true,
-            'data' => $districts,
+            'data' => $districts->map(function ($district) {
+                return [
+                    'id' => $district->id,
+                    'region_id' => $district->region_id,
+                    'name' => $district->name_en,
+                    'name_en' => $district->name_en,
+                    'name_tj' => $district->name_tj,
+                    'code' => $district->code,
+                    'area_km2' => $district->area_km2,
+                    'geometry' => $district->getGeometryArray(),
+                    'center' => $district->getCenterPoint(),
+                    'bbox' => $district->getBoundingBox(),
+                ];
+            }),
+        ]);
+    }
+    
+    /**
+     * Get districts as GeoJSON FeatureCollection
+     */
+    public function getDistrictsGeoJSON(Request $request): JsonResponse
+    {
+        $regionId = $request->input('region_id');
+        
+        $query = District::query();
+        
+        if ($regionId) {
+            $query->where('region_id', $regionId);
+        }
+        
+        $districts = $query
+            ->select('id', 'region_id', 'name_en', 'name_tj', 'code', 'area_km2', 'geometry')
+            ->get();
+        
+        $features = $districts->map(function ($district) {
+            return $district->toGeoJSONFeature();
+        });
+        
+        return response()->json([
+            'type' => 'FeatureCollection',
+            'features' => $features,
+            'totalCount' => $features->count(),
         ]);
     }
 

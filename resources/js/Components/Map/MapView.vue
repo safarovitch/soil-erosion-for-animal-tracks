@@ -782,7 +782,7 @@ const zoomToDistrict = (districtName) => {
 const loadGeoJSONOnMapReady = async () => {
   try {
     console.log('Loading GeoJSON automatically...')
-    const geoJsonPath = '/geoBoundaries-TJK-ADM2.geojson'
+    const geoJsonPath = '/storage/geoBoundaries-TJK-ADM2.geojson'
 
     await loadGeoJSONLayer(geoJsonPath, 'tajikistan-districts')
     console.log('GeoJSON layer loaded successfully automatically')

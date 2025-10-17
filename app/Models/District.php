@@ -69,5 +69,87 @@ class District extends Model
     {
         return static::where('name_en', $name)->first();
     }
+    
+    /**
+     * Get geometry as GeoJSON array (decoded from JSON string)
+     */
+    public function getGeometryArray(): ?array
+    {
+        if (!$this->geometry) {
+            return null;
+        }
+        
+        return is_array($this->geometry) ? $this->geometry : json_decode($this->geometry, true);
+    }
+    
+    /**
+     * Calculate bounding box for the district geometry
+     */
+    public function getBoundingBox(): ?array
+    {
+        $geometry = $this->getGeometryArray();
+        
+        if (!$geometry || !isset($geometry['coordinates'][0])) {
+            return null;
+        }
+        
+        $coords = $geometry['coordinates'][0];
+        
+        $minLon = $maxLon = $coords[0][0];
+        $minLat = $maxLat = $coords[0][1];
+        
+        foreach ($coords as $coord) {
+            $lon = $coord[0];
+            $lat = $coord[1];
+            
+            $minLon = min($minLon, $lon);
+            $maxLon = max($maxLon, $lon);
+            $minLat = min($minLat, $lat);
+            $maxLat = max($maxLat, $lat);
+        }
+        
+        return [
+            'west' => $minLon,
+            'south' => $minLat,
+            'east' => $maxLon,
+            'north' => $maxLat,
+        ];
+    }
+    
+    /**
+     * Get center point of the district
+     */
+    public function getCenterPoint(): ?array
+    {
+        $bbox = $this->getBoundingBox();
+        
+        if (!$bbox) {
+            return null;
+        }
+        
+        return [
+            'lon' => ($bbox['west'] + $bbox['east']) / 2,
+            'lat' => ($bbox['south'] + $bbox['north']) / 2,
+        ];
+    }
+    
+    /**
+     * Export geometry as GeoJSON Feature
+     */
+    public function toGeoJSONFeature(): array
+    {
+        return [
+            'type' => 'Feature',
+            'properties' => [
+                'id' => $this->id,
+                'name' => $this->name_en,
+                'name_tj' => $this->name_tj,
+                'code' => $this->code,
+                'area_km2' => $this->area_km2,
+                'region_id' => $this->region_id,
+            ],
+            'geometry' => $this->getGeometryArray(),
+        ];
+    }
 
 }

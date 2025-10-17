@@ -7,245 +7,283 @@ use App\Models\District;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class TajikistanBoundariesSeeder extends Seeder
 {
     /**
+     * District to Region mapping based on Tajikistan administrative structure
+     */
+    private array $districtRegionMapping = [
+        // Sughd Region
+        'Asht District' => 'TJ-SU',
+        'Ayni District' => 'TJ-SU',
+        'Ghafurov District' => 'TJ-SU',
+        'Ghonchi District' => 'TJ-SU',
+        'Isfara District' => 'TJ-SU',
+        'Istaravshan District' => 'TJ-SU',
+        'Jabbor Rasulov District' => 'TJ-SU',
+        'Konibodom District' => 'TJ-SU',
+        'Kuhistoni Mastchoh District' => 'TJ-SU',
+        'Mastchoh District' => 'TJ-SU',
+        'Panjakent District' => 'TJ-SU',
+        'Spitamen District' => 'TJ-SU',
+        'Shahriston District' => 'TJ-SU',
+        'Zafarobod District' => 'TJ-SU',
+        
+        // Khatlon Region
+        'Baljuvon District' => 'TJ-KT',
+        'Bokhtar District' => 'TJ-KT',
+        'Danghara District' => 'TJ-KT',
+        'Dzhami District' => 'TJ-KT',
+        'Farkhor District' => 'TJ-KT',
+        'Hamadoni District' => 'TJ-KT',
+        'Jilikul District' => 'TJ-KT',
+        'Khovaling District' => 'TJ-KT',
+        'Khuroson District' => 'TJ-KT',
+        'Kulob District' => 'TJ-KT',
+        'Muminobod District' => 'TJ-KT',
+        'Norak District' => 'TJ-KT',
+        'Panj District' => 'TJ-KT',
+        'Qabodiyon District' => 'TJ-KT',
+        'Qumsangir District' => 'TJ-KT',
+        'Rumi District' => 'TJ-KT',
+        'Shahrtuz District' => 'TJ-KT',
+        'Shuro-obod District' => 'TJ-KT',
+        'Temurmalik District' => 'TJ-KT',
+        'Vakhsh District' => 'TJ-KT',
+        "Vose' District" => 'TJ-KT',
+        'Yovon District' => 'TJ-KT',
+        
+        // Gorno-Badakhshan Autonomous Region (GBAO)
+        'Darvoz District' => 'TJ-GB',
+        'Ishkoshim District' => 'TJ-GB',
+        'Murghob District' => 'TJ-GB',
+        "Roshtqal'a District" => 'TJ-GB',
+        'Rushon District' => 'TJ-GB',
+        'Shughnon District' => 'TJ-GB',
+        'Vanj District' => 'TJ-GB',
+        'Nosiri Khusrav District' => 'TJ-GB',
+        
+        // Districts of Republican Subordination (DRS)
+        'Faizobod District' => 'TJ-RA',
+        'Hisor District' => 'TJ-RA',
+        'Jirgatol District' => 'TJ-RA',
+        'Nurobod District' => 'TJ-RA',
+        'Rasht District' => 'TJ-RA',
+        'Roghun District' => 'TJ-RA',
+        'Rudaki District' => 'TJ-RA',
+        'Sarband District' => 'TJ-RA',
+        'Sharinav District' => 'TJ-RA',
+        'Tavildara District' => 'TJ-RA',
+        'Tojikobod District' => 'TJ-RA',
+        'Tursunzoda District' => 'TJ-RA',
+        'Vahdat District' => 'TJ-RA',
+        'Varzob District' => 'TJ-RA',
+    ];
+
+    /**
      * Run the database seeds.
-     *
-     * NOTE: This seeder creates sample boundary data for testing.
-     * For production use, replace the sample geometries with actual
-     * GeoJSON data from official Tajikistan administrative boundaries.
-     *
-     * To load real boundary data:
-     * 1. Obtain GeoJSON files for Tajikistan regions and districts
-     * 2. Convert the GeoJSON to PostGIS geometry format
-     * 3. Replace the sample data below with real coordinates
      */
     public function run(): void
     {
-        // Tajikistan regions (viloyat level)
+        Log::info('Starting Tajikistan boundaries seeding...');
+        
+        // Clear existing data
+        DB::table('districts')->delete();
+        DB::table('regions')->delete();
+        
+        // Create regions first
+        $this->createRegions();
+        
+        // Load districts from GeoJSON
+        $this->loadDistrictsFromGeoJSON();
+        
+        Log::info('Tajikistan boundaries seeding completed');
+    }
+    
+    /**
+     * Create Tajikistan regions
+     */
+    private function createRegions(): void
+    {
         $regions = [
             [
                 'name_en' => 'Dushanbe',
                 'name_tj' => 'Душанбе',
                 'code' => 'TJ-DU',
                 'area_km2' => 126.6,
-                'geometry' => [
-                    'type' => 'Polygon',
-                    'coordinates' => [[[68.5, 38.5], [68.7, 38.5], [68.7, 38.7], [68.5, 38.7], [68.5, 38.5]]]
-                ]
+                'geometry' => null, // Will be populated from district aggregation
             ],
             [
                 'name_en' => 'Sughd',
                 'name_tj' => 'Суғд',
                 'code' => 'TJ-SU',
                 'area_km2' => 25100,
-                'geometry' => [
-                    'type' => 'Polygon',
-                    'coordinates' => [[[68.0, 39.0], [70.0, 39.0], [70.0, 40.5], [68.0, 40.5], [68.0, 39.0]]]
-                ]
+                'geometry' => null,
             ],
             [
                 'name_en' => 'Khatlon',
                 'name_tj' => 'Хатлон',
                 'code' => 'TJ-KT',
                 'area_km2' => 24600,
-                'geometry' => [
-                    'type' => 'Polygon',
-                    'coordinates' => [[[68.0, 37.0], [70.0, 37.0], [70.0, 39.0], [68.0, 39.0], [68.0, 37.0]]]
-                ]
+                'geometry' => null,
             ],
             [
                 'name_en' => 'Gorno-Badakhshan',
                 'name_tj' => 'Вилояти Мухтори Кӯҳистони Бадахшон',
                 'code' => 'TJ-GB',
                 'area_km2' => 64400,
-                'geometry' => [
-                    'type' => 'Polygon',
-                    'coordinates' => [[[71.0, 37.0], [75.0, 37.0], [75.0, 40.0], [71.0, 40.0], [71.0, 37.0]]]
-                ]
+                'geometry' => null,
             ],
             [
                 'name_en' => 'Districts of Republican Subordination',
                 'name_tj' => 'Ноҳияҳои тобеи ҷумҳурӣ',
                 'code' => 'TJ-RA',
                 'area_km2' => 28600,
-                'geometry' => [
-                    'type' => 'Polygon',
-                    'coordinates' => [[[68.0, 38.0], [71.0, 38.0], [71.0, 39.0], [68.0, 39.0], [68.0, 38.0]]]
-                ]
+                'geometry' => null,
             ],
         ];
 
         foreach ($regions as $regionData) {
-            // Store geometry as JSON string for SQLite compatibility
-            $regionData['geometry'] = json_encode($regionData['geometry']);
+            $regionData['geometry'] = $regionData['geometry'] ? json_encode($regionData['geometry']) : null;
             Region::create($regionData);
-        }
-
-        // Sample districts (nohiya level) for Sughd region
-        $sughdRegion = Region::where('code', 'TJ-SU')->first();
-        if ($sughdRegion) {
-            $sughdDistricts = [
-                [
-                    'region_id' => $sughdRegion->id,
-                    'name_en' => 'Khujand',
-                    'name_tj' => 'Хуҷанд',
-                    'code' => 'TJ-SU-KH',
-                    'area_km2' => 2600,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[69.5, 40.0], [69.7, 40.0], [69.7, 40.2], [69.5, 40.2], [69.5, 40.0]]]
-                    ]
-                ],
-                [
-                    'region_id' => $sughdRegion->id,
-                    'name_en' => 'Isfara',
-                    'name_tj' => 'Исфара',
-                    'code' => 'TJ-SU-IS',
-                    'area_km2' => 832,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[70.5, 39.8], [70.7, 39.8], [70.7, 40.0], [70.5, 40.0], [70.5, 39.8]]]
-                    ]
-                ],
-                [
-                    'region_id' => $sughdRegion->id,
-                    'name_en' => 'Istaravshan',
-                    'name_tj' => 'Истаравшан',
-                    'code' => 'TJ-SU-IT',
-                    'area_km2' => 1830,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[69.0, 39.5], [69.2, 39.5], [69.2, 39.7], [69.0, 39.7], [69.0, 39.5]]]
-                    ]
-                ],
-            ];
-
-            foreach ($sughdDistricts as $districtData) {
-                // Store geometry as JSON string for SQLite compatibility
-                $districtData['geometry'] = json_encode($districtData['geometry']);
-                District::create($districtData);
-            }
-        }
-
-        // Sample districts for Khatlon region
-        $khatlonRegion = Region::where('code', 'TJ-KT')->first();
-        if ($khatlonRegion) {
-            $khatlonDistricts = [
-                [
-                    'region_id' => $khatlonRegion->id,
-                    'name_en' => 'Bokhtar',
-                    'name_tj' => 'Бохтар',
-                    'code' => 'TJ-KT-BK',
-                    'area_km2' => 2600,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[68.5, 37.5], [68.7, 37.5], [68.7, 37.7], [68.5, 37.7], [68.5, 37.5]]]
-                    ]
-                ],
-                [
-                    'region_id' => $khatlonRegion->id,
-                    'name_en' => 'Kulob',
-                    'name_tj' => 'Кӯлоб',
-                    'code' => 'TJ-KT-KL',
-                    'area_km2' => 1200,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[69.5, 37.8], [69.7, 37.8], [69.7, 38.0], [69.5, 38.0], [69.5, 37.8]]]
-                    ]
-                ],
-                [
-                    'region_id' => $khatlonRegion->id,
-                    'name_en' => 'Vose',
-                    'name_tj' => 'Восеъ',
-                    'code' => 'TJ-KT-VS',
-                    'area_km2' => 900,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[69.0, 37.0], [69.2, 37.0], [69.2, 37.2], [69.0, 37.2], [69.0, 37.0]]]
-                    ]
-                ],
-            ];
-
-            foreach ($khatlonDistricts as $districtData) {
-                // Store geometry as JSON string for SQLite compatibility
-                $districtData['geometry'] = json_encode($districtData['geometry']);
-                District::create($districtData);
-            }
-        }
-
-        // Sample districts for Gorno-Badakhshan
-        $gbRegion = Region::where('code', 'TJ-GB')->first();
-        if ($gbRegion) {
-            $gbDistricts = [
-                [
-                    'region_id' => $gbRegion->id,
-                    'name_en' => 'Khorog',
-                    'name_tj' => 'Хоруғ',
-                    'code' => 'TJ-GB-KH',
-                    'area_km2' => 8700,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[71.5, 37.5], [71.7, 37.5], [71.7, 37.7], [71.5, 37.7], [71.5, 37.5]]]
-                    ]
-                ],
-                [
-                    'region_id' => $gbRegion->id,
-                    'name_en' => 'Murghob',
-                    'name_tj' => 'Мурғоб',
-                    'code' => 'TJ-GB-MU',
-                    'area_km2' => 38500,
-                    'geometry' => [
-                        'type' => 'Polygon',
-                        'coordinates' => [[[72.0, 38.0], [72.2, 38.0], [72.2, 38.2], [72.0, 38.2], [72.0, 38.0]]]
-                    ]
-                ],
-            ];
-
-            foreach ($gbDistricts as $districtData) {
-                // Store geometry as JSON string for SQLite compatibility
-                $districtData['geometry'] = json_encode($districtData['geometry']);
-                District::create($districtData);
-            }
+            Log::info("Created region: {$regionData['name_en']}");
         }
     }
-
+    
     /**
-     * Convert GeoJSON geometry to PostGIS WKT format.
+     * Load districts from GeoJSON file
      */
-    private function convertGeoJsonToPostGis(array $geoJson): string
+    private function loadDistrictsFromGeoJSON(): void
     {
-        $type = $geoJson['type'];
-        $coordinates = $geoJson['coordinates'];
-
-        switch ($type) {
-            case 'Polygon':
-                $wkt = 'POLYGON((';
-                foreach ($coordinates[0] as $index => $coord) {
-                    if ($index > 0) $wkt .= ', ';
-                    $wkt .= $coord[0] . ' ' . $coord[1];
-                }
-                $wkt .= '))';
-                return $wkt;
-
-            case 'MultiPolygon':
-                $wkt = 'MULTIPOLYGON(';
-                foreach ($coordinates as $polygonIndex => $polygon) {
-                    if ($polygonIndex > 0) $wkt .= ', ';
-                    $wkt .= '((';
-                    foreach ($polygon[0] as $coordIndex => $coord) {
-                        if ($coordIndex > 0) $wkt .= ', ';
-                        $wkt .= $coord[0] . ' ' . $coord[1];
-                    }
-                    $wkt .= '))';
-                }
-                $wkt .= ')';
-                return $wkt;
-
-            default:
-                throw new \InvalidArgumentException("Unsupported geometry type: {$type}");
+        $geoJsonPath = storage_path('/storage/geoBoundaries-TJK-ADM2.geojson');
+        
+        if (!file_exists($geoJsonPath)) {
+            Log::error("GeoJSON file not found at: {$geoJsonPath}");
+            return;
         }
+        
+        $geoJsonContent = file_get_contents($geoJsonPath);
+        $geoData = json_decode($geoJsonContent, true);
+        
+        if (!$geoData || !isset($geoData['features'])) {
+            Log::error("Invalid GeoJSON format");
+            return;
+        }
+        
+        $districtCount = 0;
+        $unmappedDistricts = [];
+        
+        foreach ($geoData['features'] as $feature) {
+            $properties = $feature['properties'] ?? [];
+            $geometry = $feature['geometry'] ?? null;
+            
+            $districtName = $properties['shapeName'] ?? 'Unknown';
+            $shapeID = $properties['shapeID'] ?? '';
+            
+            // Find the region for this district
+            $regionCode = $this->districtRegionMapping[$districtName] ?? null;
+            
+            if (!$regionCode) {
+                $unmappedDistricts[] = $districtName;
+                Log::warning("District not mapped to region: {$districtName}");
+                // Try to continue with a default region or skip
+                continue;
+            }
+            
+            $region = Region::where('code', $regionCode)->first();
+            
+            if (!$region) {
+                Log::error("Region not found for code: {$regionCode}");
+                continue;
+            }
+            
+            // Calculate area from geometry (approximate)
+            $areaKm2 = $this->calculateAreaFromGeometry($geometry);
+            
+            // Generate a code for the district
+            $districtCode = $this->generateDistrictCode($regionCode, $districtName, $shapeID);
+            
+            // Create district
+            District::create([
+                'region_id' => $region->id,
+                'name_en' => $districtName,
+                'name_tj' => $districtName, // Use same for now, can be updated later
+                'code' => $districtCode,
+                'geometry' => json_encode($geometry),
+                'area_km2' => $areaKm2,
+            ]);
+            
+            $districtCount++;
+            Log::info("Created district: {$districtName} in region: {$region->name_en}");
+        }
+        
+        Log::info("Loaded {$districtCount} districts from GeoJSON");
+        
+        if (!empty($unmappedDistricts)) {
+            Log::warning("Unmapped districts: " . implode(', ', $unmappedDistricts));
+        }
+    }
+    
+    /**
+     * Calculate approximate area from GeoJSON geometry in km²
+     */
+    private function calculateAreaFromGeometry(?array $geometry): float
+    {
+        if (!$geometry || !isset($geometry['coordinates'])) {
+            return 0.0;
+        }
+        
+        // Simple bounding box approximation
+        // For more accurate calculation, would need proper geodesic area calculation
+        $coords = $geometry['coordinates'][0] ?? [];
+        
+        if (empty($coords) || !is_array($coords[0]) || count($coords[0]) < 2) {
+            return 0.0;
+        }
+        
+        $minLon = $maxLon = (float)$coords[0][0];
+        $minLat = $maxLat = (float)$coords[0][1];
+        
+        foreach ($coords as $coord) {
+            if (!is_array($coord) || count($coord) < 2) {
+                continue;
+            }
+            
+            $lon = (float)$coord[0];
+            $lat = (float)$coord[1];
+            
+            $minLon = min($minLon, $lon);
+            $maxLon = max($maxLon, $lon);
+            $minLat = min($minLat, $lat);
+            $maxLat = max($maxLat, $lat);
+        }
+        
+        // Approximate conversion: 1 degree ≈ 111 km at equator
+        // This is a rough approximation, adjust for latitude
+        $latFactor = cos(deg2rad(($minLat + $maxLat) / 2.0));
+        $width = ($maxLon - $minLon) * 111.0 * $latFactor;
+        $height = ($maxLat - $minLat) * 111.0;
+        
+        return round($width * $height, 2);
+    }
+    
+    /**
+     * Generate a unique district code
+     */
+    private function generateDistrictCode(string $regionCode, string $districtName, string $shapeID): string
+    {
+        // Try to create a meaningful code that fits in VARCHAR(10)
+        // Format: TJ-XX-NNN where XX is region suffix and NNN is 3 char name/id
+        
+        // Get last 2 chars of region code (e.g., "SU" from "TJ-SU")
+        $regionSuffix = substr($regionCode, -2);
+        
+        // Get first 3 letters of district name
+        $namePart = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $districtName), 0, 3));
+        
+        // Format: TJ-SU-XYZ (10 chars max)
+        return "TJ-{$regionSuffix}-{$namePart}";
     }
 }

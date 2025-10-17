@@ -62,6 +62,7 @@ Route::middleware('web')->prefix('erosion')->group(function () {
     // Geographic data
     Route::get('/regions', [ErosionController::class, 'getRegions']);
     Route::get('/districts', [ErosionController::class, 'getDistricts']);
+    Route::get('/districts/geojson', [ErosionController::class, 'getDistrictsGeoJSON']);
 });
 
 // Custom datasets (public access)
