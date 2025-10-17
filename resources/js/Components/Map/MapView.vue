@@ -19,6 +19,8 @@ import 'ol/ol.css'
 
 // Props
 const props = defineProps({
+  regions: Array,
+  districts: Array,
   selectedRegion: Object,
   selectedDistrict: Object,
   selectedYear: Number,
@@ -37,7 +39,9 @@ const vectorSource = ref(null)
 const vectorLayer = ref(null)
 const regionLayer = ref(null)
 const districtLayer = ref(null)
+const districtsBaseLayer = ref(null) // Layer showing all districts
 const topoJsonLayer = ref(null)
+const erosionDataByDistrict = ref({}) // Store erosion data for coloring
 
 // Map configuration
 const mapConfig = {
@@ -120,6 +124,163 @@ const initMap = () => {
 
   // Store resize handler for cleanup
   map.value.set('resizeHandler', handleResize)
+  
+  // Load districts layer if districts prop is available
+  if (props.districts && props.districts.length > 0) {
+    loadDistrictsLayer()
+  }
+}
+
+// Get erosion risk color based on value
+const getErosionColor = (erosionRate, opacity = 0.6) => {
+  // RUSLE Erosion Risk Classification:
+  // Very Low: < 2 t/ha/yr - Green
+  // Low: 2-5 t/ha/yr - Yellow-Green
+  // Moderate: 5-10 t/ha/yr - Yellow
+  // High: 10-20 t/ha/yr - Orange
+  // Very High: > 20 t/ha/yr - Red
+  
+  if (!erosionRate || erosionRate < 0) {
+    return `rgba(200, 200, 200, ${opacity})` // Gray for no data
+  }
+  
+  if (erosionRate < 2) {
+    return `rgba(34, 139, 34, ${opacity})` // Green - Very Low
+  } else if (erosionRate < 5) {
+    return `rgba(154, 205, 50, ${opacity})` // Yellow-Green - Low
+  } else if (erosionRate < 10) {
+    return `rgba(255, 215, 0, ${opacity})` // Yellow - Moderate
+  } else if (erosionRate < 20) {
+    return `rgba(255, 140, 0, ${opacity})` // Orange - High
+  } else {
+    return `rgba(220, 20, 60, ${opacity})` // Red - Very High
+  }
+}
+
+// Load all districts as a base layer
+const loadDistrictsLayer = () => {
+  try {
+    console.log('Loading districts layer with', props.districts.length, 'districts')
+    
+    const geojsonFormat = new GeoJSON()
+    const features = []
+    
+    props.districts.forEach((district, index) => {
+      if (district.geometry) {
+        try {
+          let geometryData = district.geometry
+          if (typeof geometryData === 'string') {
+            geometryData = JSON.parse(geometryData)
+          }
+          
+          // Create GeoJSON feature
+          const geoJsonFeature = {
+            type: 'Feature',
+            geometry: geometryData,
+            properties: {
+              id: district.id,
+              name: district.name || district.name_en,
+              name_en: district.name_en,
+              name_tj: district.name_tj,
+              region_id: district.region_id,
+              area_km2: district.area_km2,
+              erosion_rate: erosionDataByDistrict.value[district.id] || 0
+            }
+          }
+          
+          const feature = geojsonFormat.readFeature(geoJsonFeature, {
+            dataProjection: 'EPSG:4326',
+            featureProjection: 'EPSG:3857',
+          })
+          
+          features.push(feature)
+        } catch (error) {
+          console.warn(`Error loading district ${district.name_en}:`, error)
+        }
+      }
+    })
+    
+    console.log('Loaded', features.length, 'district features')
+    
+    const source = new VectorSource({
+      features,
+    })
+    
+    // Style function for districts based on erosion data
+    const styleFunction = (feature) => {
+      const erosionRate = feature.get('erosion_rate') || 0
+      const isSelected = props.selectedDistrict && feature.get('id') === props.selectedDistrict.id
+      
+      return new Style({
+        fill: new Fill({
+          color: getErosionColor(erosionRate, isSelected ? 0.8 : 0.4),
+        }),
+        stroke: new Stroke({
+          color: isSelected ? '#000000' : '#666666',
+          width: isSelected ? 3 : 1,
+        }),
+      })
+    }
+    
+    districtsBaseLayer.value = new VectorLayer({
+      source,
+      style: styleFunction,
+      zIndex: 10,
+    })
+    
+    map.value.addLayer(districtsBaseLayer.value)
+    
+    // Add click handler for districts
+    map.value.on('click', (event) => {
+      const feature = map.value.forEachFeatureAtPixel(event.pixel, (feature, layer) => {
+        if (layer === districtsBaseLayer.value) {
+          return feature
+        }
+      })
+      
+      if (feature) {
+        const districtData = {
+          id: feature.get('id'),
+          name: feature.get('name'),
+          name_en: feature.get('name_en'),
+          name_tj: feature.get('name_tj'),
+          region_id: feature.get('region_id'),
+          area_km2: feature.get('area_km2'),
+          erosion_rate: feature.get('erosion_rate'),
+        }
+        
+        emit('district-clicked', districtData)
+      }
+    })
+    
+  } catch (error) {
+    console.error('Error loading districts layer:', error)
+  }
+}
+
+// Update erosion data for a specific district
+const updateDistrictErosionData = (districtId, erosionRate) => {
+  erosionDataByDistrict.value[districtId] = erosionRate
+  
+  // Update the feature style
+  if (districtsBaseLayer.value) {
+    const source = districtsBaseLayer.value.getSource()
+    const features = source.getFeatures()
+    
+    features.forEach(feature => {
+      if (feature.get('id') === districtId) {
+        feature.set('erosion_rate', erosionRate)
+        feature.changed() // Trigger style update
+      }
+    })
+  }
+}
+
+// Refresh districts layer styling
+const refreshDistrictsLayer = () => {
+  if (districtsBaseLayer.value) {
+    districtsBaseLayer.value.getSource().changed()
+  }
 }
 
 // Handle map clicks
@@ -795,9 +956,40 @@ const loadGeoJSONOnMapReady = async () => {
   }
 }
 
+// Watchers
+watch(() => props.selectedDistrict, (newDistrict, oldDistrict) => {
+  console.log('Selected district changed:', newDistrict)
+  refreshDistrictsLayer()
+  
+  if (newDistrict && newDistrict.center) {
+    // Zoom to the selected district
+    const [lon, lat] = newDistrict.center
+    map.value.getView().animate({
+      center: fromLonLat([lon, lat]),
+      zoom: 10,
+      duration: 1000
+    })
+  }
+})
+
+watch(() => props.districts, (newDistricts) => {
+  if (newDistricts && newDistricts.length > 0 && map.value) {
+    console.log('Districts data updated, reloading layer')
+    // Remove old layer
+    if (districtsBaseLayer.value) {
+      map.value.removeLayer(districtsBaseLayer.value)
+    }
+    // Load new layer
+    loadDistrictsLayer()
+  }
+})
+
 // Expose methods to parent
 defineExpose({
   updateErosionData,
+  updateDistrictErosionData,
+  refreshDistrictsLayer,
+  loadDistrictsLayer,
   map: map,
   loadTopoJSONLayer,
   loadTopoJSONFromFile,
