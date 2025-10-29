@@ -53,7 +53,7 @@ Route::post('/logout', function (Request $request) {
 */
 
 // Erosion data endpoints
-Route::middleware('web')->prefix('erosion')->group(function () {
+Route::middleware('api')->prefix('erosion')->group(function () {
     Route::post('/compute', [ErosionController::class, 'compute']);
     Route::get('/cached', [ErosionController::class, 'getCached']);
     Route::post('/timeseries', [ErosionController::class, 'getTimeSeries']);
@@ -63,6 +63,21 @@ Route::middleware('web')->prefix('erosion')->group(function () {
     Route::get('/regions', [ErosionController::class, 'getRegions']);
     Route::get('/districts', [ErosionController::class, 'getDistricts']);
     Route::get('/districts/geojson', [ErosionController::class, 'getDistrictsGeoJSON']);
+
+    // RUSLE factor layers
+    Route::post('/layers/r-factor', [ErosionController::class, 'getRFactorLayer']);
+    Route::post('/layers/k-factor', [ErosionController::class, 'getKFactorLayer']);
+    Route::post('/layers/ls-factor', [ErosionController::class, 'getLSFactorLayer']);
+    Route::post('/layers/c-factor', [ErosionController::class, 'getCFactorLayer']);
+    Route::post('/layers/p-factor', [ErosionController::class, 'getPFactorLayer']);
+    Route::post('/layers/rainfall-slope', [ErosionController::class, 'getRainfallSlope']);
+    Route::post('/layers/rainfall-cv', [ErosionController::class, 'getRainfallCV']);
+
+    // Detailed grid data
+    Route::post('/detailed-grid', [ErosionController::class, 'getDetailedGrid']);
+    
+    // Available years
+    Route::post('/available-years', [ErosionController::class, 'getAvailableYears']);
 });
 
 // Custom datasets (public access)

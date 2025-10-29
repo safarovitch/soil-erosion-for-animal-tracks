@@ -19,6 +19,7 @@
     },
     "dependencies": {
         "@inertiajs/vue3": "^2.2.8",
+        "@turf/turf": "^7.2.0",
         "chart.js": "^4.5.1",
         "ol": "^10.6.1",
         "pinia": "^3.0.3",

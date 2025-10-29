@@ -25,7 +25,7 @@ class ErosionController extends Controller
     public function compute(Request $request): JsonResponse
     {
         $request->validate([
-            'area_type' => 'required|in:region,district',
+            'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
             'year' => 'required|integer|min:2016|max:2024',
             'period' => 'required|string|in:annual,monthly,seasonal',
@@ -37,32 +37,20 @@ class ErosionController extends Controller
                 return response()->json(['error' => 'Area not found'], 404);
             }
 
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured. Please configure GEE credentials in the .env file.',
+                    'details' => 'Contact administrator to configure GEE_SERVICE_ACCOUNT_EMAIL, GEE_PROJECT_ID, and GEE_PRIVATE_KEY_PATH',
+                ], 503); // Service Unavailable
+            }
+
             // Log the query for analytics
             $this->logQuery($request, $area, 'erosion_compute');
 
-            // Compute erosion data
-            if (!$this->geeService->isAvailable()) {
-                // GEE is not configured, use mock data without logging errors
-                $data = $this->getMockErosionData($area, $request->year);
-            } else {
-                try {
-                    $data = $this->geeService->computeErosionForArea($area, $request->year, $request->period);
-                } catch (\Exception $geeError) {
-                    // Only log GEE errors once per session to reduce log spam
-                    $errorKey = 'gee_error_logged_' . md5($geeError->getMessage());
-                    if (!session()->has($errorKey)) {
-                        Log::warning('GEE computation failed, using mock data', [
-                            'request' => $request->all(),
-                            'error' => $geeError->getMessage(),
-                            'note' => 'This error will not be logged again in this session'
-                        ]);
-                        session()->put($errorKey, true);
-                    }
-
-                    // Return mock data when GEE fails
-                    $data = $this->getMockErosionData($area, $request->year);
-                }
-            }
+            // Compute erosion data directly from GEE
+            $data = $this->geeService->computeErosionForArea($area, $request->year, $request->period);
 
             return response()->json([
                 'success' => true,
@@ -79,11 +67,13 @@ class ErosionController extends Controller
             Log::error('Erosion computation failed', [
                 'request' => $request->all(),
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'error' => 'Computation failed. Please try again later.',
+                'error' => 'GEE computation failed: ' . $e->getMessage(),
+                'details' => 'Please check GEE credentials and try again.',
             ], 500);
         }
     }
@@ -189,35 +179,23 @@ class ErosionController extends Controller
         ]);
 
         try {
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured.',
+                    'details' => 'Please configure GEE credentials to analyze custom geometries.',
+                ], 503);
+            }
+
             // Log the query
             $this->logQuery($request, null, 'geometry_analysis', [
                 'geometry' => $request->geometry,
                 'year' => $request->year,
             ]);
 
-            // Analyze the geometry
-            if (!$this->geeService->isAvailable()) {
-                // GEE is not configured, use mock data without logging errors
-                $data = $this->getMockGeometryAnalysis($request->geometry, $request->year);
-            } else {
-                try {
-                    $data = $this->geeService->analyzeGeometry($request->geometry, $request->year);
-                } catch (\Exception $geeError) {
-                    // Only log GEE errors once per session to reduce log spam
-                    $errorKey = 'gee_geometry_error_logged_' . md5($geeError->getMessage());
-                    if (!session()->has($errorKey)) {
-                        Log::warning('GEE geometry analysis failed, using mock data', [
-                            'request' => $request->all(),
-                            'error' => $geeError->getMessage(),
-                            'note' => 'This error will not be logged again in this session'
-                        ]);
-                        session()->put($errorKey, true);
-                    }
-
-                    // Return mock data when GEE fails
-                    $data = $this->getMockGeometryAnalysis($request->geometry, $request->year);
-                }
-            }
+            // Analyze the geometry directly with GEE
+            $data = $this->geeService->analyzeGeometry($request->geometry, $request->year);
 
             return response()->json([
                 'success' => true,
@@ -229,11 +207,13 @@ class ErosionController extends Controller
             Log::error('Geometry analysis failed', [
                 'request' => $request->all(),
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'error' => 'Geometry analysis failed. Please try again later.',
+                'error' => 'GEE analysis failed: ' . $e->getMessage(),
+                'details' => 'Please check your geometry and try again.',
             ], 500);
         }
     }
@@ -243,13 +223,13 @@ class ErosionController extends Controller
      */
     public function getRegions(): JsonResponse
     {
-        $regions = Region::select('id', 'name_en', 'name_tj', 'code', 'area_km2')
+        $regions = Region::select('id', 'name_en', 'name_tj', 'code', 'area_km2', 'geometry')
             ->orderBy('name_en')
             ->get();
 
         return response()->json([
             'success' => true,
-            'data' => $regions,
+            'regions' => $regions,
         ]);
     }
 
@@ -322,6 +302,352 @@ class ErosionController extends Controller
     }
 
     /**
+     * Get RUSLE R-factor layer data.
+     */
+    public function getRFactorLayer(Request $request): JsonResponse
+    {
+        return $this->getLayerData($request, 'r_factor');
+    }
+
+    /**
+     * Get RUSLE K-factor layer data.
+     */
+    public function getKFactorLayer(Request $request): JsonResponse
+    {
+        return $this->getLayerData($request, 'k_factor');
+    }
+
+    /**
+     * Get RUSLE LS-factor layer data.
+     */
+    public function getLSFactorLayer(Request $request): JsonResponse
+    {
+        return $this->getLayerData($request, 'ls_factor');
+    }
+
+    /**
+     * Get RUSLE C-factor layer data.
+     */
+    public function getCFactorLayer(Request $request): JsonResponse
+    {
+        return $this->getLayerData($request, 'c_factor');
+    }
+
+    /**
+     * Get RUSLE P-factor layer data.
+     */
+    public function getPFactorLayer(Request $request): JsonResponse
+    {
+        return $this->getLayerData($request, 'p_factor');
+    }
+
+    /**
+     * Get rainfall slope/trend data.
+     */
+    public function getRainfallSlope(Request $request): JsonResponse
+    {
+        $request->validate([
+            'area_type' => 'required|in:region,district,country',
+            'area_id' => 'required|integer',
+            'start_year' => 'required|integer|min:2016|max:2024',
+            'end_year' => 'required|integer|min:2016|max:2024',
+        ]);
+
+        try {
+            // Handle country-wide requests
+            if ($request->area_type === 'country') {
+                // For country-wide, we'll use a default region or create a country-wide area
+                $area = Region::first(); // Use first region as proxy for country-wide
+                if (!$area) {
+                    return response()->json(['error' => 'No regions available for country-wide data'], 404);
+                }
+            } else {
+                $area = $this->getArea($request->area_type, $request->area_id);
+                if (!$area) {
+                    return response()->json(['error' => 'Area not found'], 404);
+                }
+            }
+
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured.',
+                ], 503);
+            }
+
+            // Fetch directly from GEE
+            $data = $this->geeService->getRainfallSlope($area, $request->start_year, $request->end_year);
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+                'area_type' => $request->area_type,
+                'area_id' => $request->area_id,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Rainfall slope retrieval failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to retrieve rainfall slope data: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Get rainfall CV data.
+     */
+    public function getRainfallCV(Request $request): JsonResponse
+    {
+        $request->validate([
+            'area_type' => 'required|in:region,district,country',
+            'area_id' => 'required|integer',
+            'start_year' => 'required|integer|min:2016|max:2024',
+            'end_year' => 'required|integer|min:2016|max:2024',
+        ]);
+
+        try {
+            // Handle country-wide requests
+            if ($request->area_type === 'country') {
+                // For country-wide, we'll use a default region or create a country-wide area
+                $area = Region::first(); // Use first region as proxy for country-wide
+                if (!$area) {
+                    return response()->json(['error' => 'No regions available for country-wide data'], 404);
+                }
+            } else {
+                $area = $this->getArea($request->area_type, $request->area_id);
+                if (!$area) {
+                    return response()->json(['error' => 'Area not found'], 404);
+                }
+            }
+
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured.',
+                ], 503);
+            }
+
+            // Fetch directly from GEE
+            $data = $this->geeService->getRainfallCV($area, $request->start_year, $request->end_year);
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+                'area_type' => $request->area_type,
+                'area_id' => $request->area_id,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Rainfall CV retrieval failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to retrieve rainfall CV data: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Get detailed erosion grid for selected area.
+     */
+    public function getDetailedGrid(Request $request): JsonResponse
+    {
+        $request->validate([
+            'area_type' => 'required|in:region,district,country',
+            'area_id' => 'required|integer',
+            'year' => 'required|integer|min:2016|max:2024',
+            'grid_size' => 'integer|min:5|max:50',
+        ]);
+
+        try {
+            $area = $this->getArea($request->area_type, $request->area_id);
+            if (!$area) {
+                return response()->json(['error' => 'Area not found'], 404);
+            }
+
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured.',
+                ], 503);
+            }
+
+            $gridSize = $request->grid_size ?? 10;
+
+            // Fetch directly from GEE
+            $gridData = $this->geeService->getDetailedErosionGrid($area, $request->year, $gridSize);
+
+            return response()->json([
+                'success' => true,
+                'data' => $gridData,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Detailed grid retrieval failed', [
+                'area' => $request->area_id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to retrieve detailed grid data: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Get available years for a specific area from GEE
+     */
+    public function getAvailableYears(Request $request): JsonResponse
+    {
+        $request->validate([
+            'area_type' => 'required|string|in:region,district',
+            'area_id' => 'required|integer',
+        ]);
+
+        try {
+            $area = $this->getArea($request->area_type, $request->area_id);
+            if (!$area) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Area not found',
+                ], 404);
+            }
+
+            // Check if GEE is available
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured. Please configure GEE credentials in the .env file.',
+                    'details' => 'Contact administrator to configure GEE_SERVICE_ACCOUNT_EMAIL, GEE_PROJECT_ID, and GEE_PRIVATE_KEY_PATH',
+                ], 503);
+            }
+
+            // Log the query
+            $this->logQuery($request, $area, 'available_years', []);
+
+            // Fetch available years from GEE
+            $availableYears = $this->geeService->getAvailableYears($area);
+
+            return response()->json([
+                'success' => true,
+                'data' => $availableYears,
+                'area' => [
+                    'type' => $request->area_type,
+                    'id' => $area->id,
+                    'name' => $area->name_en,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Available years error', [
+                'area' => $area->name_en ?? 'unknown',
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to fetch available years',
+                'details' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Calculate bounding box for area.
+     */
+    private function calculateBoundingBox($area): array
+    {
+        $geometry = null;
+        
+        if (is_array($area->geometry)) {
+            $geometry = $area->geometry;
+        } elseif (is_string($area->geometry)) {
+            $geometry = json_decode($area->geometry, true);
+        }
+        
+        if (!$geometry || !isset($geometry['coordinates'])) {
+            return [68.0, 36.0, 75.0, 41.0]; // Default Tajikistan bounds
+        }
+        
+        $coords = [];
+        if ($geometry['type'] === 'Polygon') {
+            $coords = $geometry['coordinates'][0] ?? [];
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            $coords = $geometry['coordinates'][0][0] ?? [];
+        }
+        
+        if (empty($coords)) {
+            return [68.0, 36.0, 75.0, 41.0];
+        }
+        
+        $minLon = $maxLon = (float)$coords[0][0];
+        $minLat = $maxLat = (float)$coords[0][1];
+        
+        foreach ($coords as $coord) {
+            if (!is_array($coord) || count($coord) < 2) {
+                continue;
+            }
+            
+            $lon = (float)$coord[0];
+            $lat = (float)$coord[1];
+            
+            $minLon = min($minLon, $lon);
+            $maxLon = max($maxLon, $lon);
+            $minLat = min($minLat, $lat);
+            $maxLat = max($maxLat, $lat);
+        }
+        
+        return [$minLon, $minLat, $maxLon, $maxLat];
+    }
+
+    /**
+     * Check if a point is within a geometry using ray casting algorithm.
+     */
+    private function isPointInGeometry(float $x, float $y, array $geometry): bool
+    {
+        // Get coordinates from geometry
+        $coords = [];
+        
+        if ($geometry['type'] === 'Polygon') {
+            $coords = $geometry['coordinates'][0] ?? [];
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            $coords = $geometry['coordinates'][0][0] ?? [];
+        } else {
+            return true; // If not polygon, include by default
+        }
+        
+        if (empty($coords)) {
+            return true;
+        }
+
+        // Ray casting algorithm for point-in-polygon test
+        $inside = false;
+        $n = count($coords);
+        
+        for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+            $xi = $coords[$i][0];
+            $yi = $coords[$i][1];
+            $xj = $coords[$j][0];
+            $yj = $coords[$j][1];
+            
+            $intersect = (($yi > $y) != ($yj > $y))
+                && ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi) + $xi);
+            
+            if ($intersect) {
+                $inside = !$inside;
+            }
+        }
+        
+        return $inside;
+    }
+
+    /**
      * Get area by type and ID.
      */
     private function getArea(string $type, int $id): Region|District|null
@@ -329,8 +655,75 @@ class ErosionController extends Controller
         return match ($type) {
             'region' => Region::find($id),
             'district' => District::find($id),
+            'country' => Region::first(), // Use first region as proxy for country-wide
             default => null,
         };
+    }
+
+    /**
+     * Generic method to get RUSLE factor layer data.
+     */
+    private function getLayerData(Request $request, string $factor): JsonResponse
+    {
+        $request->validate([
+            'area_type' => 'required|in:region,district,country',
+            'area_id' => 'required|integer',
+            'year' => 'required|integer|min:2016|max:2024',
+        ]);
+
+        try {
+            // Handle country-wide requests
+            if ($request->area_type === 'country') {
+                // For country-wide, we'll use a default region or create a country-wide area
+                $area = Region::first(); // Use first region as proxy for country-wide
+                if (!$area) {
+                    return response()->json(['error' => 'No regions available for country-wide data'], 404);
+                }
+            } else {
+                $area = $this->getArea($request->area_type, $request->area_id);
+                if (!$area) {
+                    return response()->json(['error' => 'Area not found'], 404);
+                }
+            }
+
+            // Check if GEE is configured
+            if (!$this->geeService->isAvailable()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Google Earth Engine is not configured.',
+                ], 503);
+            }
+
+            // Call the appropriate GEE service method directly
+            $methodMap = [
+                'r_factor' => 'getRainfallErosivity',
+                'k_factor' => 'getSoilErodibility',
+                'ls_factor' => 'getTopographicFactor',
+                'c_factor' => 'getCoverManagementFactor',
+                'p_factor' => 'getSupportPracticeFactor',
+            ];
+
+            $method = $methodMap[$factor] ?? null;
+            if (!$method) {
+                return response()->json(['error' => 'Invalid layer'], 400);
+            }
+
+            $data = $this->geeService->$method($area, $request->year);
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Layer {$factor} retrieval failed", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'error' => "Failed to retrieve {$factor} data: " . $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
@@ -361,77 +754,4 @@ class ErosionController extends Controller
         }
     }
 
-    /**
-     * Get mock erosion data for demonstration purposes.
-     */
-    private function getMockErosionData($area, int $year): array
-    {
-        // Generate mock data based on area and year
-        $baseErosion = $area->area_km2 * 0.1; // Mock calculation
-        $yearVariation = sin($year - 2016) * 0.2; // Vary by year
-
-        return [
-            'tiles' => null, // No tiles for mock data
-            'statistics' => [
-                'mean_erosion_rate' => round($baseErosion + $yearVariation, 2),
-                'bare_soil_frequency' => round(15 + ($year - 2016) * 2, 1),
-                'sustainability_factor' => round(0.7 - ($year - 2016) * 0.02, 2),
-                'total_area' => $area->area_km2,
-                'high_risk_area' => round($area->area_km2 * 0.15, 2),
-                'moderate_risk_area' => round($area->area_km2 * 0.35, 2),
-                'low_risk_area' => round($area->area_km2 * 0.50, 2),
-            ],
-            'time_series' => $this->getMockTimeSeries($area, $year),
-            'distribution' => $this->getMockDistribution($area),
-        ];
-    }
-
-    /**
-     * Get mock time series data.
-     */
-    private function getMockTimeSeries($area, int $currentYear): array
-    {
-        $series = [];
-        for ($year = 2016; $year <= 2024; $year++) {
-            $series[] = [
-                'year' => $year,
-                'mean_erosion_rate' => round($area->area_km2 * 0.1 + sin($year - 2016) * 0.2, 2),
-                'bare_soil_frequency' => round(15 + ($year - 2016) * 2, 1),
-                'sustainability_factor' => round(0.7 - ($year - 2016) * 0.02, 2),
-            ];
-        }
-        return $series;
-    }
-
-    /**
-     * Get mock distribution data.
-     */
-    private function getMockDistribution($area): array
-    {
-        return [
-            ['category' => 'Very Low', 'area' => round($area->area_km2 * 0.25, 2), 'percentage' => 25],
-            ['category' => 'Low', 'area' => round($area->area_km2 * 0.25, 2), 'percentage' => 25],
-            ['category' => 'Moderate', 'area' => round($area->area_km2 * 0.30, 2), 'percentage' => 30],
-            ['category' => 'High', 'area' => round($area->area_km2 * 0.15, 2), 'percentage' => 15],
-            ['category' => 'Very High', 'area' => round($area->area_km2 * 0.05, 2), 'percentage' => 5],
-        ];
-    }
-
-    /**
-     * Get mock geometry analysis data.
-     */
-    private function getMockGeometryAnalysis(array $geometry, int $year): array
-    {
-        // Generate mock analysis based on geometry type and year
-        $baseRate = 5.0 + ($year - 2016) * 0.5; // Vary by year
-        $variation = sin($year - 2016) * 1.0; // Add some variation
-
-        return [
-            'mean_erosion_rate' => round($baseRate + $variation, 2),
-            'bare_soil_frequency' => round(20 + ($year - 2016) * 3, 1),
-            'sustainability_factor' => round(0.65 - ($year - 2016) * 0.03, 2),
-            'total_area' => round(100 + rand(-20, 50), 2), // Mock area calculation
-            'risk_level' => $baseRate > 7 ? 'High' : ($baseRate > 4 ? 'Moderate' : 'Low'),
-        ];
-    }
 }

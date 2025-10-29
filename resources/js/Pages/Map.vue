@@ -3,6 +3,16 @@
         <!-- Progress Bar -->
         <ProgressBar :visible="loading" :progress="progress" :message="loadingMessage" />
 
+        <!-- Toast Notification -->
+        <ToastNotification
+            :show="toast.show"
+            :type="toast.type"
+            :title="toast.title"
+            :message="toast.message"
+            :details="toast.details"
+            @close="toast.show = false"
+        />
+
         <!-- Main Content -->
         <div class="flex flex-1 overflow-hidden relative">
             <!-- Left Sidebar -->
@@ -29,10 +39,13 @@
                     <RegionSelector 
                         v-model:selectedRegion="selectedRegion" 
                         v-model:selectedDistrict="selectedDistrict" 
+                        v-model:selectedAreaType="selectedAreaType"
                         :regions="regions" 
                         :districts="filteredDistricts" 
                         @region-change="handleRegionChange" 
                         @district-change="handleDistrictChange" 
+                        @area-type-change="handleAreaTypeChange"
+                        @areas-change="handleAreasChange"
                     />
 
                     <!-- Time Series Slider -->
@@ -40,6 +53,7 @@
                         v-model:year="selectedYear" 
                         :start-year="2016" 
                         :end-year="2024" 
+                        :selected-area="selectedArea"
                         @year-change="handleYearChange" 
                         class="mt-6" 
                     />
@@ -48,17 +62,23 @@
                     <LayerControl 
                         :visible-layers="visibleLayers" 
                         :available-layers="availableLayers" 
+                        :show-labels="showLabels"
                         @layer-toggle="handleLayerToggle" 
+                        @labels-toggle="handleLabelsToggle"
                         class="mt-6" 
                     />
 
                     <!-- Drawing Tools -->
-                    <DrawingTools 
-                        v-model:drawing-mode="drawingMode" 
-                        :map="mapInstance" 
-                        @geometry-drawn="handleGeometryDrawn" 
-                        class="mt-6" 
-                    />
+                    
+                    <!-- Test Button -->
+                    <div class="mt-4">
+                        <button 
+                            @click="testVisualization" 
+                            class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                        >
+                            Test Visualization
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Resize Handle -->
@@ -82,6 +102,27 @@
 
             <!-- Map and Statistics Container -->
             <div class="flex-1 flex flex-col overflow-hidden relative">
+                <!-- Export Toolbar -->
+                <div class="absolute top-4 right-4 z-30 flex space-x-2">
+                    <button
+                        @click="exportMapAsPNG"
+                        class="px-3 py-2 bg-white rounded-lg shadow-lg hover:bg-gray-50 flex items-center space-x-2"
+                        title="Export map as PNG"
+                    >
+                        <span class="text-lg">📷</span>
+                        <span class="text-sm font-medium">Export PNG</span>
+                    </button>
+                    <button
+                        @click="exportStatisticsCSV"
+                        :disabled="!statistics"
+                        class="px-3 py-2 bg-white rounded-lg shadow-lg hover:bg-gray-50 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Export statistics as CSV"
+                    >
+                        <span class="text-lg">📊</span>
+                        <span class="text-sm font-medium">Export CSV</span>
+                    </button>
+                </div>
+
                 <!-- Map Container - Fits remaining space -->
                 <div class="flex-1 relative bg-gray-100 overflow-hidden">
                     <div v-if="!mapInstance" class="flex items-center justify-center h-full">
@@ -97,13 +138,20 @@
                         :districts="districts"
                         :selected-region="selectedRegion" 
                         :selected-district="selectedDistrict" 
+                        :selected-areas="selectedAreas"
                         :selected-year="selectedYear" 
                         :visible-layers="visibleLayers" 
-                        :drawing-mode="drawingMode" 
                         @map-ready="handleMapReady" 
                         @statistics-updated="handleStatisticsUpdated" 
                         @district-clicked="handleDistrictClicked" 
+                        @region-clicked="handleRegionClicked"
                         @geojson-loaded="handleGeoJSONLoaded" 
+                    />
+
+                    <!-- Map Legend -->
+                    <MapLegend 
+                        :visible-layers="visibleLayers"
+                        :available-layers="availableLayers"
                     />
 
                     <!-- Expand Bottom Panel Button (when collapsed) -->
@@ -145,54 +193,12 @@
 
                     <!-- Scrollable Content Area -->
                     <div class="flex-1 overflow-y-auto p-6 pt-8">
-                        <div class="grid grid-cols-2 gap-6">
-                            <!-- Statistics Panel -->
-                            <div>
-                                <h3 class="text-lg font-bold mb-4 text-gray-800">
-                                    <span v-if="selectedArea">{{ selectedArea.name || selectedArea.name_en }}</span>
-                                    <span v-else>Statistics</span>
-                                </h3>
-                                <div v-if="statistics" class="bg-gray-50 rounded-lg p-4">
-                                    <div class="space-y-3">
-                                        <div class="flex justify-between items-center border-b pb-2">
-                                            <span class="text-gray-600 font-medium">Mean Erosion Rate:</span>
-                                            <span class="font-bold text-lg" :class="getErosionRateClass(statistics.meanErosionRate)">
-                                                {{ statistics.meanErosionRate }} t/ha/yr
-                                            </span>
-                                        </div>
-                                        <div class="flex justify-between items-center border-b pb-2">
-                                            <span class="text-gray-600 font-medium">Bare Soil Frequency:</span>
-                                            <span class="font-bold text-lg text-orange-600">{{ statistics.bareSoilFrequency }}%</span>
-                                        </div>
-                                        <div class="flex justify-between items-center border-b pb-2">
-                                            <span class="text-gray-600 font-medium">Sustainability Factor:</span>
-                                            <span class="font-bold text-lg text-green-600">{{ statistics.sustainabilityFactor }}</span>
-                                        </div>
-                                        <div v-if="statistics.districtCount" class="flex justify-between items-center pt-2 text-sm">
-                                            <span class="text-gray-600">Districts Analyzed:</span>
-                                            <span class="font-medium text-blue-600">{{ statistics.districtCount }} of {{ districts.length }}</span>
-                                        </div>
-                                        <div v-if="statistics.riskLevel" class="mt-3 p-2 rounded" :class="getRiskLevelBgClass(statistics.riskLevel)">
-                                            <div class="text-center font-bold">
-                                                Risk Level: {{ statistics.riskLevel }}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div v-else class="bg-gray-50 rounded-lg p-4 text-center text-gray-500">
-                                    Loading country-wide statistics...
-                                </div>
-                            </div>
-
-                            <!-- Charts Panel -->
-                            <div>
-                                <h3 class="text-lg font-bold mb-4 text-gray-800">Time Series Analysis</h3>
-                                <ChartPanel 
-                                    :time-series-data="timeSeriesData" 
-                                    :selected-area="selectedArea" 
-                                />
-                            </div>
-                        </div>
+                        <!-- Comprehensive Statistics Panel -->
+                        <StatisticsPanel 
+                            :selected-area="selectedArea"
+                            :statistics="statistics"
+                            :time-series-data="timeSeriesData"
+                        />
                         
                         <!-- Erosion Risk Legend -->
                         <div class="mt-6 border-t pt-4">
@@ -201,27 +207,27 @@
                                 <div class="text-center">
                                     <div class="h-6 rounded mb-1" style="background-color: rgba(34, 139, 34, 0.6)"></div>
                                     <div class="font-medium text-green-700">Very Low</div>
-                                    <div class="text-gray-600">&lt; 2 t/ha/yr</div>
-                                </div>
-                                <div class="text-center">
-                                    <div class="h-6 rounded mb-1" style="background-color: rgba(154, 205, 50, 0.6)"></div>
-                                    <div class="font-medium text-lime-700">Low</div>
-                                    <div class="text-gray-600">2-5 t/ha/yr</div>
+                                    <div class="text-gray-600">0-5 t/ha/yr</div>
                                 </div>
                                 <div class="text-center">
                                     <div class="h-6 rounded mb-1" style="background-color: rgba(255, 215, 0, 0.6)"></div>
-                                    <div class="font-medium text-yellow-700">Moderate</div>
-                                    <div class="text-gray-600">5-10 t/ha/yr</div>
+                                    <div class="font-medium text-yellow-700">Low</div>
+                                    <div class="text-gray-600">5-15 t/ha/yr</div>
                                 </div>
                                 <div class="text-center">
                                     <div class="h-6 rounded mb-1" style="background-color: rgba(255, 140, 0, 0.6)"></div>
-                                    <div class="font-medium text-orange-700">High</div>
-                                    <div class="text-gray-600">10-20 t/ha/yr</div>
+                                    <div class="font-medium text-orange-700">Moderate</div>
+                                    <div class="text-gray-600">15-30 t/ha/yr</div>
                                 </div>
                                 <div class="text-center">
                                     <div class="h-6 rounded mb-1" style="background-color: rgba(220, 20, 60, 0.6)"></div>
-                                    <div class="font-medium text-red-700">Very High</div>
-                                    <div class="text-gray-600">&gt; 20 t/ha/yr</div>
+                                    <div class="font-medium text-red-700">Severe</div>
+                                    <div class="text-gray-600">30-50 t/ha/yr</div>
+                                </div>
+                                <div class="text-center">
+                                    <div class="h-6 rounded mb-1" style="background-color: rgba(139, 0, 0, 0.8)"></div>
+                                    <div class="font-medium text-red-900">Excessive</div>
+                                    <div class="text-gray-600">&gt; 50 t/ha/yr</div>
                                 </div>
                             </div>
                         </div>
@@ -268,9 +274,11 @@ import MapView from '@/Components/Map/MapView.vue'
 import RegionSelector from '@/Components/Map/RegionSelector.vue'
 import TimeSeriesSlider from '@/Components/Map/TimeSeriesSlider.vue'
 import LayerControl from '@/Components/Map/LayerControl.vue'
-import DrawingTools from '@/Components/Map/DrawingTools.vue'
 import ChartPanel from '@/Components/Map/ChartPanel.vue'
+import StatisticsPanel from '@/Components/Map/StatisticsPanel.vue'
+import MapLegend from '@/Components/Map/MapLegend.vue'
 import ProgressBar from '@/Components/UI/ProgressBar.vue'
+import ToastNotification from '@/Components/UI/ToastNotification.vue'
 import { GeoJSONService } from '@/Services/GeoJSONService.js'
 
 // Props
@@ -281,12 +289,14 @@ const props = defineProps({
 })
 
 // Reactive data
+const selectedAreaType = ref('') // 'country', 'region', 'district', or ''
 const selectedRegion = ref(null)
 const selectedDistrict = ref(null)
 const selectedYear = ref(2020)
 const selectedArea = ref(null)
-const visibleLayers = ref(['erosion', 'bare_soil'])
-const drawingMode = ref(null)
+const selectedAreas = ref([]) // Multiple selected areas
+const visibleLayers = ref([]) // Start with no layers selected (country-wide default)
+const showLabels = ref(true) // Show map labels by default
 const mapInstance = ref(null)
 const mapView = ref(null)
 const statistics = ref(null)
@@ -296,6 +306,15 @@ const progress = ref(0)
 const loadingMessage = ref('')
 const showLogin = ref(false)
 const loginLoading = ref(false)
+
+// Toast notification
+const toast = reactive({
+    show: false,
+    type: 'info',
+    title: '',
+    message: '',
+    details: '',
+})
 
 // Panel state
 const leftSidebarVisible = ref(true)
@@ -323,7 +342,14 @@ const loginForm = reactive({
 
 // Available layers
 const availableLayers = ref([
-    { id: 'erosion', name: 'Soil Erosion Hazard', description: 'Annual soil loss rate' },
+    { id: 'erosion', name: 'Soil Erosion Hazard', description: 'Annual soil loss rate (A = R×K×LS×C×P)', metadata: { unit: 't/ha/yr' } },
+    { id: 'rainfall_slope', name: 'Rainfall Trend', description: 'Temporal change in rainfall (% per year)', metadata: { colorScheme: 'diverging' } },
+    { id: 'rainfall_cv', name: 'Rainfall Variability', description: 'Coefficient of variation (%)', metadata: { colorScheme: 'sequential' } },
+    { id: 'r_factor', name: 'R-Factor (Rainfall Erosivity)', description: 'Rainfall erosivity factor', metadata: { unit: 'MJ mm/(ha h yr)' } },
+    { id: 'k_factor', name: 'K-Factor (Soil Erodibility)', description: 'Soil erodibility factor', metadata: { unit: 't ha h/(ha MJ mm)' } },
+    { id: 'ls_factor', name: 'LS-Factor (Topographic)', description: 'Slope length and steepness factor', metadata: { unit: 'dimensionless' } },
+    { id: 'c_factor', name: 'C-Factor (Cover Management)', description: 'Cover and management factor', metadata: { unit: 'dimensionless', range: '0-1' } },
+    { id: 'p_factor', name: 'P-Factor (Support Practice)', description: 'Support practice factor', metadata: { unit: 'dimensionless', range: '0-1' } },
     { id: 'bare_soil', name: 'Bare Soil Frequency', description: 'Frequency of bare soil exposure' },
     { id: 'sustainability', name: 'Sustainability Factor', description: 'Land management sustainability' },
     { id: 'custom', name: 'Custom Datasets', description: 'User uploaded data' },
@@ -333,6 +359,14 @@ const availableLayers = ref([
 const isAuthenticated = computed(() => props.user && props.user.role === 'admin')
 
 // Methods
+const showToast = (type, title, message, details = '') => {
+    toast.type = type
+    toast.title = title
+    toast.message = message
+    toast.details = details
+    toast.show = true
+}
+
 const handleMapReady = (map) => {
     mapInstance.value = map
     console.log('Map is ready')
@@ -399,10 +433,43 @@ const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
     }
 }
 
+const handleAreaTypeChange = (areaType) => {
+    selectedAreaType.value = areaType
+    selectedRegion.value = null
+    selectedDistrict.value = null
+    selectedAreas.value = []
+    
+    if (areaType === 'country') {
+        selectedArea.value = { id: 0, name_en: 'Tajikistan', name_tj: 'Тоҷикистон', area_type: 'country' }
+    } else {
+        selectedArea.value = null
+    }
+    
+    // Clear highlights and layer colors on the map
+    if (mapView.value) {
+        mapView.value.clearAreaHighlights()
+        mapView.value.clearAllLayerColors()
+    }
+    
+    // Only load data if a layer is active
+    if (visibleLayers.value.length > 0) {
+        loadErosionData()
+    }
+
+    // Reset district highlighting when area type changes
+    if (mapView.value) {
+        mapView.value.resetDistrictHighlighting()
+    }
+}
+
 const handleRegionChange = (region) => {
     selectedDistrict.value = null
     selectedArea.value = region
-    loadErosionData()
+    
+    // Only load data if a layer is active
+    if (visibleLayers.value.length > 0) {
+        loadErosionData()
+    }
 
     // Reset district highlighting when region is selected
     if (mapView.value) {
@@ -412,7 +479,11 @@ const handleRegionChange = (region) => {
 
 const handleDistrictChange = (district) => {
     selectedArea.value = district
-    loadErosionData()
+    
+    // Only load data if a layer is active
+    if (visibleLayers.value.length > 0) {
+        loadErosionData()
+    }
 
     // Highlight the selected district on the map
     if (mapView.value && district) {
@@ -436,12 +507,63 @@ const handleDistrictClicked = (districtData) => {
         selectedRegion.value = null // Clear region selection when district is selected
         selectedArea.value = district
         
+        // Update selected areas for highlighting
+        selectedAreas.value = [district]
+        
         // Show bottom panel if hidden
         if (!bottomPanelVisible.value) {
             bottomPanelVisible.value = true
         }
         
-        loadErosionData()
+        // Only load data if a layer is active
+        if (visibleLayers.value.length > 0) {
+            loadErosionData()
+        } else {
+            // Only highlight the selected district if no data layers are active
+            if (mapView.value) {
+                mapView.value.highlightSelectedAreas([district])
+            }
+        }
+    }
+}
+
+const handleRegionClicked = (regionData) => {
+    console.log('Region clicked:', regionData)
+    
+    // Find the region in our regions list
+    const region = regions.value.find(r =>
+        r.id === regionData.id ||
+        r.name_en === regionData.name_en ||
+        r.name_tj === regionData.name_tj
+    )
+    
+    if (region) {
+        selectedRegion.value = region
+        selectedDistrict.value = null // Clear district selection when region is selected
+        selectedArea.value = region
+        
+        // Update selected areas for highlighting
+        selectedAreas.value = [region]
+        
+        // Show bottom panel if hidden
+        if (!bottomPanelVisible.value) {
+            bottomPanelVisible.value = true
+        }
+        
+        // Only load data if a layer is active
+        if (visibleLayers.value.length > 0) {
+            loadErosionData()
+        } else {
+            // Only highlight the selected region if no data layers are active
+            if (mapView.value) {
+                mapView.value.highlightSelectedAreas([region])
+            }
+        }
+        
+        // Update the map view to highlight the selected region
+        if (mapView.value) {
+            mapView.value.updateRegionLayer(region)
+        }
     }
 }
 
@@ -451,19 +573,124 @@ const handleYearChange = (year) => {
 
 const handleLayerToggle = (layerId, visible) => {
     if (visible) {
-        visibleLayers.value.push(layerId)
+        // Clear all previous layer colors and area highlights first
+        if (mapView.value) {
+            console.log('Clearing previous layer colors and area highlights before showing new layer')
+            mapView.value.clearAllLayerColors()
+            mapView.value.clearAreaHighlights()
+        }
+        
+        // Show only the selected layer - clear all others first
+        visibleLayers.value = [layerId]
+        
+        // If no area is selected, automatically select all available areas
+        if (!selectedArea.value && selectedAreas.value.length === 0) {
+            console.log('No area selected, auto-selecting all available areas')
+            selectAllAvailableAreas()
+        }
+        
+        // Load data for the selected area (if any) or country-wide
+        loadErosionData()
     } else {
-        const index = visibleLayers.value.indexOf(layerId)
-        if (index > -1) {
-            visibleLayers.value.splice(index, 1)
+        // Hide the layer
+        visibleLayers.value = []
+        
+        // Clear all layer colors from the map
+        if (mapView.value) {
+            mapView.value.clearAllLayerColors()
+        }
+        
+        // Restore area highlights when no layers are active
+        if (selectedAreas.value.length > 0) {
+            console.log('Restoring area highlights since no layers are active')
+            mapView.value.highlightSelectedAreas(selectedAreas.value)
+        }
+    }
+}
+
+const handleLabelsToggle = (visible) => {
+    showLabels.value = visible
+    
+    // Toggle labels on the map
+    if (mapView.value) {
+        mapView.value.toggleLabels(visible)
+    }
+}
+
+const testVisualization = () => {
+    console.log('Testing visualization from Map.vue')
+    if (mapView.value) {
+        mapView.value.testVisualization()
+    }
+}
+
+const selectAllAvailableAreas = () => {
+    console.log('Auto-selecting all available areas from GeoJSON data')
+    
+    const allAreas = []
+    
+    // Add all regions
+    if (regions.value && regions.value.length > 0) {
+        regions.value.forEach(region => {
+            if (region.geometry) {
+                allAreas.push({ ...region, type: 'region' })
+            }
+        })
+        console.log(`Added ${regions.value.length} regions`)
+    }
+    
+    // Add all districts
+    if (districts.value && districts.value.length > 0) {
+        districts.value.forEach(district => {
+            if (district.geometry) {
+                allAreas.push({ ...district, type: 'district' })
+            }
+        })
+        console.log(`Added ${districts.value.length} districts`)
+    }
+    
+    // Update selected areas
+    selectedAreas.value = allAreas
+    
+    // Update selectedArea to the first area for backward compatibility
+    if (allAreas.length > 0) {
+        selectedArea.value = allAreas[0]
+    }
+    
+    console.log(`Auto-selected ${allAreas.length} total areas`)
+    
+    // Highlight all selected areas on the map
+    if (mapView.value) {
+        mapView.value.highlightSelectedAreas(allAreas)
+    }
+}
+
+const handleAreasChange = (selectedAreas) => {
+    console.log('Multiple areas selected:', selectedAreas)
+    
+    // Update selectedArea to the first area for backward compatibility
+    if (selectedAreas.length > 0) {
+        selectedArea.value = selectedAreas[0]
+    } else {
+        selectedArea.value = null
+    }
+    
+    // Store all selected areas
+    selectedAreas.value = selectedAreas
+    
+    // Only load data if a layer is active
+    if (visibleLayers.value.length > 0) {
+        loadErosionData()
+    } else {
+        // Only highlight selected areas if no data layers are active
+        if (mapView.value) {
+            mapView.value.highlightSelectedAreas(selectedAreas)
         }
     }
 }
 
 
-const handleGeometryDrawn = (geometry) => {
-    analyzeGeometry(geometry)
-}
+
 
 const handleStatisticsUpdated = (stats) => {
     statistics.value = stats
@@ -472,21 +699,21 @@ const handleStatisticsUpdated = (stats) => {
 // Helper function to get erosion rate color class
 const getErosionRateClass = (rate) => {
     const erosionRate = parseFloat(rate)
-    if (erosionRate < 2) return 'text-green-600'      // Very Low
-    if (erosionRate < 5) return 'text-lime-600'       // Low
-    if (erosionRate < 10) return 'text-yellow-600'    // Moderate
-    if (erosionRate < 20) return 'text-orange-600'    // High
-    return 'text-red-600'                              // Very High
+    if (erosionRate < 5) return 'text-green-600'      // Very Low
+    if (erosionRate < 15) return 'text-yellow-600'    // Low
+    if (erosionRate < 30) return 'text-orange-600'    // Moderate
+    if (erosionRate < 50) return 'text-red-600'       // Severe
+    return 'text-red-900'                              // Excessive
 }
 
 // Helper function to get risk level background class
 const getRiskLevelBgClass = (level) => {
     switch (level) {
         case 'Very Low': return 'bg-green-100 text-green-800'
-        case 'Low': return 'bg-lime-100 text-lime-800'
-        case 'Moderate': return 'bg-yellow-100 text-yellow-800'
-        case 'High': return 'bg-orange-100 text-orange-800'
-        case 'Very High': return 'bg-red-100 text-red-800'
+        case 'Low': return 'bg-yellow-100 text-yellow-800'
+        case 'Moderate': return 'bg-orange-100 text-orange-800'
+        case 'Severe': return 'bg-red-100 text-red-800'
+        case 'Excessive': return 'bg-red-900 text-white'
         default: return 'bg-gray-100 text-gray-800'
     }
 }
@@ -494,16 +721,27 @@ const getRiskLevelBgClass = (level) => {
 // Determine risk level from erosion rate
 const getRiskLevel = (rate) => {
     const erosionRate = parseFloat(rate)
-    if (erosionRate < 2) return 'Very Low'
-    if (erosionRate < 5) return 'Low'
-    if (erosionRate < 10) return 'Moderate'
-    if (erosionRate < 20) return 'High'
-    return 'Very High'
+    if (erosionRate < 5) return 'Very Low'
+    if (erosionRate < 15) return 'Low'
+    if (erosionRate < 30) return 'Moderate'
+    if (erosionRate < 50) return 'Severe'
+    return 'Excessive'
 }
 
 const loadErosionData = async () => {
-    if (!selectedArea.value) return
-
+    // Only load data if a layer is active
+    if (visibleLayers.value.length === 0) {
+        console.log('No layers active, skipping data load')
+        return
+    }
+    
+    // Clear all previous layer colors and area highlights before loading new data
+    if (mapView.value) {
+        console.log('Clearing previous layer colors and area highlights before loading new data')
+        mapView.value.clearAllLayerColors()
+        mapView.value.clearAreaHighlights()
+    }
+    
     loading.value = true
     progress.value = 0
     loadingMessage.value = 'Loading erosion data...'
@@ -513,45 +751,90 @@ const loadErosionData = async () => {
         progress.value = 25
         loadingMessage.value = 'Preparing analysis...'
 
+        let requestBody
+        if (selectedArea.value) {
+            if (selectedArea.value.area_type === 'country') {
+                // Country selected
+                requestBody = {
+                    area_type: 'country',
+                    area_id: 0,
+                    year: selectedYear.value,
+                    period: 'annual',
+                }
+            } else {
+                // Specific area selected (region or district)
+                requestBody = {
+                    area_type: selectedArea.value.region_id ? 'district' : 'region',
+                    area_id: selectedArea.value.id,
+                    year: selectedYear.value,
+                    period: 'annual',
+                }
+            }
+        } else {
+            // No area selected - country-wide data
+            requestBody = {
+                area_type: 'country',
+                area_id: 0,
+                year: selectedYear.value,
+                period: 'annual',
+            }
+        }
+
         const response = await fetch('/api/erosion/compute', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
             },
-            body: JSON.stringify({
-                area_type: selectedArea.value.region_id ? 'district' : 'region',
-                area_id: selectedArea.value.id,
-                year: selectedYear.value,
-                period: 'annual',
-            }),
+            body: JSON.stringify(requestBody),
         })
 
         progress.value = 75
         loadingMessage.value = 'Processing data...'
 
         const data = await response.json()
+        
+        // Check for GEE configuration error
+        if (!data.success) {
+            if (response.status === 503) {
+                showToast('error', 'GEE Not Configured', data.error, data.details)
+            } else {
+                showToast('error', 'Computation Error', data.error, data.details)
+            }
+            return
+        }
+        
         if (data.success) {
             // Update map with new data
             mapView.value?.updateErosionData(data.data)
             
             // Extract erosion rate and update district coloring
-            if (data.data && data.data.statistics && selectedArea.value) {
-                const erosionRate = parseFloat(data.data.statistics.mean_erosion_rate) || 0
+            if (data.data && data.data.statistics) {
+                const stats = data.data.statistics
+                const erosionRate = parseFloat(stats.mean_erosion_rate) || 0
                 
-                // Update the district color based on erosion rate
-                if (selectedArea.value.id && mapView.value) {
+                // Update the district color based on erosion rate (only for specific areas)
+                if (selectedArea.value && selectedArea.value.id && mapView.value) {
                     mapView.value.updateDistrictErosionData(selectedArea.value.id, erosionRate)
                 }
                 
-                // Update statistics display
-                const avgErosion = erosionRate.toFixed(2)
+                // Update statistics display with comprehensive data
                 statistics.value = {
-                    meanErosionRate: avgErosion,
-                    bareSoilFrequency: (data.data.statistics.bare_soil_frequency || 0).toFixed(1),
-                    sustainabilityFactor: (data.data.statistics.sustainability_factor || 0).toFixed(2),
-                    districtCount: selectedArea.value.region_id ? 1 : null, // 1 district if it's a district
-                    riskLevel: getRiskLevel(avgErosion),
+                    meanErosionRate: erosionRate.toFixed(2),
+                    minErosionRate: (stats.min_erosion_rate || 0).toFixed(2),
+                    maxErosionRate: (stats.max_erosion_rate || 0).toFixed(2),
+                    erosionCV: (stats.erosion_cv || 0).toFixed(1),
+                    bareSoilFrequency: (stats.bare_soil_frequency || 0).toFixed(1),
+                    sustainabilityFactor: (stats.sustainability_factor || 0).toFixed(2),
+                    rainfallSlope: (stats.rainfall_slope || 0).toFixed(2),
+                    rainfallCV: (stats.rainfall_cv || 0).toFixed(1),
+                    districtCount: selectedArea.value ? (selectedArea.value.region_id ? 1 : null) : null,
+                    riskLevel: getRiskLevel(erosionRate),
+                    severityDistribution: stats.severity_distribution || [],
+                    rusleFactors: stats.rusle_factors || {},
+                    topErodingAreas: stats.top_eroding_areas || [],
+                    areaType: selectedArea.value ? (selectedArea.value.region_id ? 'district' : 'region') : 'country',
+                    areaName: selectedArea.value ? selectedArea.value.name_en : 'Tajikistan',
                 }
             }
             
@@ -560,6 +843,7 @@ const loadErosionData = async () => {
         }
     } catch (error) {
         console.error('Failed to load erosion data:', error)
+        showToast('error', 'Data Loading Failed', 'Could not load erosion data for the selected area.', error.message)
     } finally {
         // Keep progress bar visible for a moment to show completion
         setTimeout(() => {
@@ -573,11 +857,11 @@ const loadErosionData = async () => {
 const analyzeGeometry = async (geometry) => {
     loading.value = true
     progress.value = 0
-    loadingMessage.value = 'Analyzing geometry...'
+    loadingMessage.value = 'Analyzing drawn shape...'
 
     try {
         progress.value = 50
-        loadingMessage.value = 'Processing area...'
+        loadingMessage.value = 'Computing RUSLE factors...'
 
         const response = await fetch('/api/erosion/analyze-geometry', {
             method: 'POST',
@@ -595,11 +879,35 @@ const analyzeGeometry = async (geometry) => {
         loadingMessage.value = 'Analysis complete!'
 
         const data = await response.json()
-        if (data.success) {
-            statistics.value = data.data
+        if (data.success && data.data && data.data.statistics) {
+            const stats = data.data.statistics
+            const erosionRate = parseFloat(stats.mean_erosion_rate) || 0
+            
+            // Update statistics with comprehensive data
+            statistics.value = {
+                meanErosionRate: erosionRate.toFixed(2),
+                minErosionRate: (stats.min_erosion_rate || 0).toFixed(2),
+                maxErosionRate: (stats.max_erosion_rate || 0).toFixed(2),
+                erosionCV: (stats.erosion_cv || 0).toFixed(1),
+                bareSoilFrequency: (stats.bare_soil_frequency || 0).toFixed(1),
+                sustainabilityFactor: (stats.sustainability_factor || 0).toFixed(2),
+                rainfallSlope: (stats.rainfall_slope || 0).toFixed(2),
+                rainfallCV: (stats.rainfall_cv || 0).toFixed(1),
+                riskLevel: getRiskLevel(erosionRate),
+                severityDistribution: stats.severity_distribution || [],
+                rusleFactors: stats.rusle_factors || {},
+                topErodingAreas: stats.top_eroding_areas || [],
+            }
+            
+            // Set selected area to the drawn shape
+            selectedArea.value = {
+                name: 'Custom Drawn Area',
+                name_en: 'Custom Drawn Area',
+            }
         }
     } catch (error) {
         console.error('Failed to analyze geometry:', error)
+        showToast('error', 'Analysis Failed', 'Could not analyze the drawn shape.', error.message)
     } finally {
         setTimeout(() => {
             loading.value = false
@@ -644,6 +952,160 @@ const logout = async () => {
     } catch (error) {
         console.error('Logout failed:', error)
     }
+}
+
+// Export map as PNG
+const exportMapAsPNG = () => {
+    if (!mapInstance.value) {
+        showToast('warning', 'Map Not Ready', 'Please wait for the map to load before exporting.')
+        return
+    }
+
+    loading.value = true
+    loadingMessage.value = 'Preparing map export...'
+
+    mapInstance.value.once('rendercomplete', () => {
+        try {
+            const mapCanvas = document.createElement('canvas')
+            const size = mapInstance.value.getSize()
+            mapCanvas.width = size[0]
+            mapCanvas.height = size[1]
+            const mapContext = mapCanvas.getContext('2d')
+
+            // Get all canvas elements from the map
+            const canvases = mapInstance.value.getViewport().querySelectorAll('.ol-layer canvas, canvas.ol-layer')
+            
+            canvases.forEach((canvas) => {
+                if (canvas.width > 0) {
+                    const opacity = canvas.parentNode.style.opacity || canvas.style.opacity
+                    mapContext.globalAlpha = opacity === '' ? 1 : parseFloat(opacity)
+                    
+                    const transform = canvas.style.transform
+                    const matrix = transform.match(/^matrix\(([^\(]*)\)$/)?.[1].split(',').map(Number)
+                    
+                    if (matrix) {
+                        mapContext.setTransform(...matrix)
+                    }
+                    
+                    mapContext.drawImage(canvas, 0, 0)
+                    mapContext.setTransform(1, 0, 0, 1, 0, 0)
+                }
+            })
+
+            // Add title and metadata overlay
+            mapContext.globalAlpha = 1
+            mapContext.fillStyle = 'rgba(255, 255, 255, 0.9)'
+            mapContext.fillRect(10, 10, 400, 80)
+            mapContext.fillStyle = '#000'
+            mapContext.font = 'bold 18px Arial'
+            mapContext.fillText('RUSLE Soil Erosion Map - Tajikistan', 20, 35)
+            mapContext.font = '14px Arial'
+            const areaName = selectedArea.value?.name || selectedArea.value?.name_en || 'Country-wide'
+            mapContext.fillText(`Area: ${areaName}`, 20, 55)
+            mapContext.fillText(`Year: ${selectedYear.value} | Date: ${new Date().toLocaleDateString()}`, 20, 75)
+
+            // Convert to blob and download
+            mapCanvas.toBlob((blob) => {
+                const link = document.createElement('a')
+                link.href = URL.createObjectURL(blob)
+                link.download = `rusle-map-${selectedArea.value?.name_en || 'tajikistan'}-${selectedYear.value}-${new Date().toISOString().split('T')[0]}.png`
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+                
+                loading.value = false
+                loadingMessage.value = ''
+            })
+        } catch (error) {
+            console.error('Error exporting map:', error)
+            showToast('error', 'Export Failed', 'Could not export map as PNG.', error.message)
+            loading.value = false
+            loadingMessage.value = ''
+        }
+    })
+
+    // Trigger a render
+    mapInstance.value.renderSync()
+}
+
+// Export statistics as CSV
+const exportStatisticsCSV = () => {
+    if (!statistics.value) return
+
+    const csvData = []
+    
+    // Header
+    csvData.push(['RUSLE Soil Erosion Statistics'])
+    csvData.push(['Generated:', new Date().toLocaleString()])
+    csvData.push([])
+    
+    // Area Information
+    csvData.push(['Area Information'])
+    csvData.push(['Name', selectedArea.value?.name || selectedArea.value?.name_en || 'N/A'])
+    csvData.push(['Type', selectedArea.value?.region_id ? 'District' : 'Region'])
+    csvData.push(['Year', selectedYear.value])
+    csvData.push([])
+    
+    // Erosion Statistics
+    csvData.push(['Erosion Statistics'])
+    csvData.push(['Metric', 'Value', 'Unit'])
+    csvData.push(['Mean Erosion Rate', statistics.value.meanErosionRate || 0, 't/ha/yr'])
+    csvData.push(['Min Erosion Rate', statistics.value.minErosionRate || 0, 't/ha/yr'])
+    csvData.push(['Max Erosion Rate', statistics.value.maxErosionRate || 0, 't/ha/yr'])
+    csvData.push(['Coefficient of Variation', statistics.value.erosionCV || 0, '%'])
+    csvData.push(['Risk Level', statistics.value.riskLevel || 'N/A', ''])
+    csvData.push([])
+    
+    // Additional Metrics
+    if (statistics.value.bareSoilFrequency) {
+        csvData.push(['Bare Soil Frequency', statistics.value.bareSoilFrequency, '%'])
+    }
+    if (statistics.value.sustainabilityFactor) {
+        csvData.push(['Sustainability Factor', statistics.value.sustainabilityFactor, ''])
+    }
+    if (statistics.value.rainfallSlope) {
+        csvData.push(['Rainfall Trend', statistics.value.rainfallSlope, '% per year'])
+    }
+    if (statistics.value.rainfallCV) {
+        csvData.push(['Rainfall Variability', statistics.value.rainfallCV, '%'])
+    }
+    csvData.push([])
+    
+    // Severity Distribution
+    if (statistics.value.severityDistribution) {
+        csvData.push(['Severity Class Distribution'])
+        csvData.push(['Class', 'Area (ha)', 'Percentage'])
+        statistics.value.severityDistribution.forEach(item => {
+            csvData.push([item.class, item.area, `${item.percentage.toFixed(1)}%`])
+        })
+        csvData.push([])
+    }
+    
+    // RUSLE Factors
+    if (statistics.value.rusleFactors) {
+        csvData.push(['RUSLE Factors'])
+        csvData.push(['Factor', 'Value', 'Unit'])
+        const factors = statistics.value.rusleFactors
+        csvData.push(['R-Factor (Rainfall Erosivity)', factors.r || 0, 'MJ mm/(ha h yr)'])
+        csvData.push(['K-Factor (Soil Erodibility)', factors.k || 0, 't ha h/(ha MJ mm)'])
+        csvData.push(['LS-Factor (Topographic)', factors.ls || 0, 'dimensionless'])
+        csvData.push(['C-Factor (Cover Management)', factors.c || 0, '0-1'])
+        csvData.push(['P-Factor (Support Practice)', factors.p || 0, '0-1'])
+    }
+    
+    // Convert to CSV string
+    const csvString = csvData.map(row => row.join(',')).join('\n')
+    
+    // Create blob and download
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `rusle-statistics-${selectedArea.value?.name_en || 'tajikistan'}-${selectedYear.value}-${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
 }
 
 // Panel Resize Functions
@@ -827,10 +1289,8 @@ onMounted(() => {
     document.body.style.overflow = 'hidden'
     document.documentElement.style.overflow = 'hidden'
     
-    // Load country-wide erosion data on startup
-    setTimeout(() => {
-        loadCountryWideData()
-    }, 1000) // Wait for map to initialize
+    // Don't load data by default - wait for user to select a layer
+    console.log('Application started - no layers active by default')
 })
 
 onUnmounted(() => {

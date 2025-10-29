@@ -1,0 +1,14 @@
+{
+    "type": "service_account",
+    "project_id": "icarda-test",
+    "private_key_id": "2625e3c61c8f66cdd66c96b145455b4630306c5f",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDhFyOiyKnss1z5\n0IThUCrmU5J+qrxtBsTpEhocNHLM3mojE5zPf3YZ961W7MT9ZMoIQCqTV65GHNOT\n7S8xgfZT5txs89YxHhUlOf37UM9IqkMk+PaxSdOSLLgc3L+hKpQm1JXBgd4T3fR0\nqZ8g7AW17U+dlD2VWY5J8ZXwbzc+0qCQ68L0LZlXKySz1PSrMzZMOElVm1QBUliq\nT4VBxqE/M2uZcTQXqaRhDjvre6vP4mkHJCRiBb2a9bktY/JWaPFCKKcgzXpXqQ2B\nofjfupPPSWYDMIni0PLAnV7mIO63O+rkBnPVuaKhS51AecJ89kLJLD3Zxb1O+0Y5\nV+Ly0uYvAgMBAAECggEAY10GF62SSZGyOPtCNX5gubVpxW3UaSKkWSjrCsliZirG\n2r4lKnofZf4ucGFr4loUT4kX4lxB6+R8x9/bxfSTi10tsBEB3EPl3L2Zb1AweOjk\nZBVdPU0UTwJbsi4Gj/xOU0fj5fzQzp9b8wYP34YhTTq5uxu+Bch3Zg/1+yH1Vs7r\nLRpzehSZFWhMBtZia8oShtHpZmbJxat56Cvk3aprKx8KPpRuF1CJ8WLQw9NKqyQW\n0/4HdE2shSabNWtxgQ1dt+WgzvB6kHDd40B8kqgkXN0vkjD8arXeswdBMpYXmPbY\nHr1KOovQ6d2zR+t31LVgVPbt7O783CgI+SIaVR7pRQKBgQDyjqaGiWF+XToHpE+G\nzCVWhj9mBdVKWcewwQv18+JrHPzKTv0XSfo/ZcW6EG/TZnbPVRfEJ+aRQPwrRGtb\nPDPf1Rl/+r5Ze0x5ik4v8EYwyi0oUn0OShF6JI65BmGBkBADQjMGpeCecnjPrYNK\nTkW2D5qmVUYPQ4ZoUAqCUBjSswKBgQDtkKxGaoEuYthohHw/C9+WdAPnGb2+rvWK\nL9Es76Y34YSdmrA+M3i99hYyM7Xutz0eMTKqQw7ToEyq+UKlfraJavD2pLa4VKld\naqwjIT2PO590tEsPySFut7FBez/cTV0IVibcsASFk8K4EyqSx8EVVFu8Ernl3JXb\nwVKe5fCslQKBgFo1v61NrtrGZWyuKX2is0hIyY9yH+91EJWmVoJ04AKiV0oOsoZU\n1yN5AF7A+jYPZ6SYqywjAteG6cJVwe++pjRbFw7H/L9e4gRZ8dZWcGR47O6QLz5/\nQZzBt+sMensrTylHF58jVjTXsiLbD3c1QSwDBatTD6lhnb1x91ab33+NAoGARaF2\n7TjAXmE4fwH+DNilE0sz7aO82swbSgKT8/DWLmDaZvt1FvYtOLiNbu97Ltnkfxn6\neK8pBFxivGZM44cNZ5/BuvkyWTrvXWMryywuB/J43VMPATR5qSMMQF4orKC8WPov\nb9XjrWdO1nc/rkAAVwkfzjNK65XJEt1KIyrQbTUCgYAkun1m5+Pg97VeHX7xIXsV\nt6cDxvWil/+JKdILbPWX2cmOPlbqZ9FYSGS+2a7tAif1RTcoZx3YCchBTi5VHdeO\nhDNqNWaZSFdR+JKPttsntsbqkqheAlJxQI3/gsppYge3+WDUjrEqWWa+uKflt2Jv\ntcPOCZY5Eq6gEN04NUVzrw==\n-----END PRIVATE KEY-----\n",
+    "client_email": "icarda-service-acc@icarda-test.iam.gserviceaccount.com",
+    "client_id": "109185650481452341489",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/icarda-service-acc%40icarda-test.iam.gserviceaccount.com",
+    "universe_domain": "googleapis.com"
+  }
+  

@@ -36,43 +36,67 @@
       </div>
     </div>
 
+    <!-- Shape Management Tools -->
+    <div class="border-t pt-4">
+      <h4 class="text-sm font-medium text-gray-900 mb-2">Shape Management</h4>
+      <div class="flex space-x-2">
+        <button
+          @click="toggleEditMode"
+          :class="[
+            'flex-1 px-3 py-2 rounded-md text-sm transition-colors',
+            editMode
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          ]"
+        >
+          ✏️ {{ editMode ? 'Stop Editing' : 'Edit Shapes' }}
+        </button>
+        <button
+          @click="deleteSelectedShape"
+          :disabled="!editMode"
+          class="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+        >
+          🗑️ Delete
+        </button>
+      </div>
+      <button
+        v-if="drawingHistory.length > 0"
+        @click="clearAllShapes"
+        class="w-full mt-2 bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 text-sm"
+      >
+        Clear All Shapes
+      </button>
+    </div>
+
     <!-- Drawing History -->
     <div v-if="drawingHistory.length > 0" class="border-t pt-4">
       <div class="flex items-center justify-between mb-2">
-        <h4 class="text-sm font-medium text-gray-900">Drawing History</h4>
-        <button
-          @click="clearHistory"
-          class="text-xs text-red-600 hover:text-red-800"
-        >
-          Clear All
-        </button>
+        <h4 class="text-sm font-medium text-gray-900">Drawn Shapes ({{ drawingHistory.length }})</h4>
       </div>
 
       <div class="space-y-2 max-h-32 overflow-y-auto">
         <div
           v-for="(drawing, index) in drawingHistory"
-          :key="index"
-          class="flex items-center justify-between p-2 bg-gray-50 rounded text-sm"
+          :key="drawing.id"
+          :class="[
+            'flex items-center justify-between p-2 rounded text-sm',
+            selectedDrawing && selectedDrawing.id === drawing.id
+              ? 'bg-blue-100 border border-blue-300'
+              : 'bg-gray-50'
+          ]"
         >
           <div class="flex items-center space-x-2">
             <span>{{ drawing.icon }}</span>
-            <span>{{ drawing.type }}</span>
-            <span class="text-gray-500">{{ drawing.timestamp }}</span>
+            <span class="font-medium">{{ drawing.type }}</span>
+            <span class="text-gray-500 text-xs">{{ drawing.timestamp }}</span>
           </div>
           <div class="flex space-x-1">
             <button
               @click="selectDrawing(index)"
-              class="text-blue-600 hover:text-blue-800"
-              title="Select"
+              class="text-blue-600 hover:text-blue-800 text-xs px-1"
+              title="View Stats"
             >
-              👁️
-            </button>
-            <button
-              @click="deleteDrawing(index)"
-              class="text-red-600 hover:text-red-800"
-              title="Delete"
-            >
-              🗑️
+              📊
             </button>
           </div>
         </div>
@@ -157,6 +181,7 @@ const selectedDrawing = ref(null)
 const measuringArea = ref(false)
 const measuringDistance = ref(false)
 const measurementResult = ref(null)
+const editMode = ref(false)
 
 // Drawing modes
 const drawingModes = ref([
@@ -233,6 +258,52 @@ const deleteDrawing = (index) => {
 const clearHistory = () => {
   drawingHistory.value = []
   selectedDrawing.value = null
+}
+
+const toggleEditMode = () => {
+  editMode.value = !editMode.value
+  
+  if (editMode.value) {
+    // Enable edit mode on map
+    if (props.map && props.map.enableShapeEditing) {
+      props.map.enableShapeEditing()
+    }
+    // Deactivate drawing mode
+    emit('update:drawingMode', 'none')
+  } else {
+    // Disable edit mode on map
+    if (props.map && props.map.disableShapeEditing) {
+      props.map.disableShapeEditing()
+    }
+  }
+}
+
+const deleteSelectedShape = () => {
+  if (!editMode.value) return
+  
+  if (confirm('Are you sure you want to delete the selected shape?')) {
+    if (props.map && props.map.deleteSelectedShape) {
+      props.map.deleteSelectedShape()
+    }
+    // Remove from history
+    if (selectedDrawing.value) {
+      const index = drawingHistory.value.findIndex(d => d.id === selectedDrawing.value.id)
+      if (index > -1) {
+        drawingHistory.value.splice(index, 1)
+      }
+      selectedDrawing.value = null
+    }
+  }
+}
+
+const clearAllShapes = () => {
+  if (confirm('Are you sure you want to delete all drawn shapes?')) {
+    if (props.map && props.map.clearAllShapes) {
+      props.map.clearAllShapes()
+    }
+    clearHistory()
+    editMode.value = false
+  }
 }
 
 const toggleMeasurement = (type) => {

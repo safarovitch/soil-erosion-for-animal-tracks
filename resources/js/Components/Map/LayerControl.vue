@@ -2,6 +2,25 @@
   <div class="space-y-4">
     <h3 class="text-lg font-semibold text-gray-900">Layer Control</h3>
 
+    <!-- Map Labels Toggle -->
+    <div class="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+      <div class="flex items-center space-x-3">
+        <input
+          type="checkbox"
+          id="map-labels"
+          :checked="showLabels"
+          @change="toggleLabels($event.target.checked)"
+          class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+        />
+        <div>
+          <label for="map-labels" class="text-sm font-medium text-gray-900 cursor-pointer">
+            Map Labels
+          </label>
+          <p class="text-xs text-gray-500">Show/hide map labels</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Layer List -->
     <div class="space-y-3">
       <div
@@ -155,10 +174,14 @@ const props = defineProps({
     required: true,
     default: () => [],
   },
+  showLabels: {
+    type: Boolean,
+    default: true,
+  },
 })
 
 // Emits
-const emit = defineEmits(['layer-toggle', 'layer-order-change'])
+const emit = defineEmits(['layer-toggle', 'layer-order-change', 'labels-toggle'])
 
 // Reactive data
 const selectedLayerInfo = ref(null)
@@ -166,6 +189,10 @@ const selectedLayerInfo = ref(null)
 // Methods
 const toggleLayer = (layerId, visible) => {
   emit('layer-toggle', layerId, visible)
+}
+
+const toggleLabels = (visible) => {
+  emit('labels-toggle', visible)
 }
 
 const getLayerName = (layerId) => {

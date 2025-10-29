@@ -89,18 +89,39 @@ class District extends Model
     {
         $geometry = $this->getGeometryArray();
         
-        if (!$geometry || !isset($geometry['coordinates'][0])) {
+        if (!$geometry || !isset($geometry['coordinates'])) {
             return null;
         }
         
-        $coords = $geometry['coordinates'][0];
+        // Handle different geometry types
+        $coords = [];
+        if ($geometry['type'] === 'Polygon') {
+            $coords = $geometry['coordinates'][0] ?? [];
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            // Flatten all polygons
+            foreach ($geometry['coordinates'] as $polygon) {
+                if (isset($polygon[0])) {
+                    $coords = array_merge($coords, $polygon[0]);
+                }
+            }
+        } else {
+            return null;
+        }
         
-        $minLon = $maxLon = $coords[0][0];
-        $minLat = $maxLat = $coords[0][1];
+        if (empty($coords) || !isset($coords[0][0], $coords[0][1])) {
+            return null;
+        }
+        
+        $minLon = $maxLon = (float)$coords[0][0];
+        $minLat = $maxLat = (float)$coords[0][1];
         
         foreach ($coords as $coord) {
-            $lon = $coord[0];
-            $lat = $coord[1];
+            if (!is_array($coord) || count($coord) < 2) {
+                continue;
+            }
+            
+            $lon = (float)$coord[0];
+            $lat = (float)$coord[1];
             
             $minLon = min($minLon, $lon);
             $maxLon = max($maxLon, $lon);
@@ -117,19 +138,31 @@ class District extends Model
     }
     
     /**
-     * Get center point of the district
+     * Get center point of the district [lon, lat]
      */
     public function getCenterPoint(): ?array
     {
         $bbox = $this->getBoundingBox();
         
-        if (!$bbox) {
+        if (!$bbox || !is_array($bbox)) {
             return null;
         }
         
+        // Ensure all bbox values are present and numeric
+        if (!isset($bbox['west'], $bbox['east'], $bbox['south'], $bbox['north'])) {
+            return null;
+        }
+        
+        // Ensure they're numeric (not arrays)
+        if (!is_numeric($bbox['west']) || !is_numeric($bbox['east']) || 
+            !is_numeric($bbox['south']) || !is_numeric($bbox['north'])) {
+            return null;
+        }
+        
+        // Return [lon, lat] array
         return [
-            'lon' => ($bbox['west'] + $bbox['east']) / 2,
-            'lat' => ($bbox['south'] + $bbox['north']) / 2,
+            ((float)$bbox['west'] + (float)$bbox['east']) / 2,
+            ((float)$bbox['south'] + (float)$bbox['north']) / 2,
         ];
     }
     

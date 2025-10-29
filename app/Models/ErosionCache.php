@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class ErosionCache extends Model
 {
-    protected $table = 'erosion_cache';
+    protected $table = 'erosion_caches';
 
     protected $fillable = [
         'cacheable_type',
