@@ -239,3 +239,12 @@ php artisan tinker --execute="echo config('earthengine.private_key_path');"
 
 
 
+
+
+
+
+
+
+
+
+

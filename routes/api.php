@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ErosionController;
+use App\Http\Controllers\ErosionTileController;
 use App\Http\Controllers\Admin\DatasetController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -77,7 +78,35 @@ Route::middleware('api')->prefix('erosion')->group(function () {
     Route::post('/detailed-grid', [ErosionController::class, 'getDetailedGrid']);
     
     // Available years
-    Route::post('/available-years', [ErosionController::class, 'getAvailableYears']);
+    Route::any('/available-years', [ErosionController::class, 'getAvailableYears']);
+});
+
+// Erosion Tile System (Precomputed Maps)
+Route::prefix('erosion')->group(function () {
+    // Serve map tiles
+    Route::get('/tiles/{area_type}/{area_id}/{year}/{z}/{x}/{y}.png', 
+        [ErosionTileController::class, 'serveTile']
+    )->name('erosion.tiles');
+
+    // Check availability / queue computation
+    Route::post('/check-availability', 
+        [ErosionTileController::class, 'checkAvailability']
+    );
+
+    // Task status
+    Route::get('/task-status/{taskId}', 
+        [ErosionTileController::class, 'taskStatus']
+    );
+
+    // Callback from Python service when task starts
+    Route::post('/task-started', 
+        [ErosionTileController::class, 'taskStarted']
+    );
+
+    // Callback from Python service when task completes
+    Route::post('/task-complete', 
+        [ErosionTileController::class, 'taskComplete']
+    );
 });
 
 // Custom datasets (public access)
@@ -95,6 +124,11 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     // Dataset management
     Route::apiResource('datasets', DatasetController::class);
     Route::post('/datasets/upload', [DatasetController::class, 'upload']);
+
+    // Erosion tile precomputation (admin only)
+    Route::post('/erosion/precompute-all', 
+        [ErosionTileController::class, 'precomputeAll']
+    );
 
     // Analytics and stats
     Route::get('/stats', [\App\Http\Controllers\Admin\AnalyticsController::class, 'getStats']);

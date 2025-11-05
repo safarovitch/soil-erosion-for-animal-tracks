@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ErosionCache;
 use App\Models\Region;
 use App\Models\District;
+use App\Exceptions\GoogleEarthEngineException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
@@ -59,11 +60,9 @@ class GoogleEarthEngineService
             // Check if private key file exists
             $privateKeyFilePath = storage_path($this->privateKeyPath);
             if (!file_exists($privateKeyFilePath)) {
-                Log::warning('GEE private key file not found, skipping authentication', [
-                    'expected_path' => $privateKeyFilePath,
-                    'message' => 'Please configure GEE service account key file or disable GEE integration'
-                ]);
-                return false;
+                throw GoogleEarthEngineException::authenticationFailed(
+                    "Private key file not found at: {$privateKeyFilePath}. Please configure GEE_PRIVATE_KEY_PATH in .env"
+                );
             }
 
             // Load and parse the JSON key file
@@ -71,10 +70,9 @@ class GoogleEarthEngineService
             $keyData = json_decode($keyFileContents, true);
             
             if (!$keyData || !isset($keyData['private_key'])) {
-                Log::error('Invalid GEE private key file format', [
-                    'path' => $privateKeyFilePath,
-                ]);
-                return false;
+                throw GoogleEarthEngineException::authenticationFailed(
+                    "Invalid private key file format at: {$privateKeyFilePath}. Expected JSON with 'private_key' field."
+                );
             }
 
             // Extract the private key from JSON
@@ -95,7 +93,9 @@ class GoogleEarthEngineService
             $base64Payload = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($payload));
 
             $signature = '';
-            openssl_sign($base64Header . '.' . $base64Payload, $signature, $privateKey, 'SHA256');
+            if (!openssl_sign($base64Header . '.' . $base64Payload, $signature, $privateKey, 'SHA256')) {
+                throw GoogleEarthEngineException::authenticationFailed('Failed to sign JWT token');
+            }
             $base64Signature = str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($signature));
 
             $jwt = $base64Header . '.' . $base64Payload . '.' . $base64Signature;
@@ -111,11 +111,20 @@ class GoogleEarthEngineService
                 return true;
             }
 
-            Log::error('GEE Authentication failed', ['response' => $response->body()]);
-            return false;
+            $errorBody = $response->json() ?? [];
+            $errorMessage = is_array($errorBody['error'] ?? null) 
+                ? ($errorBody['error']['message'] ?? $response->body())
+                : ($errorBody['error'] ?? $response->body());
+            throw GoogleEarthEngineException::apiRequestFailed(
+                $response->status(),
+                $errorMessage,
+                $errorBody
+            );
+        } catch (GoogleEarthEngineException $e) {
+            throw $e;
         } catch (Exception $e) {
             Log::error('GEE Authentication error', ['error' => $e->getMessage()]);
-            return false;
+            throw GoogleEarthEngineException::authenticationFailed($e->getMessage(), $e);
         }
     }
 
@@ -137,32 +146,135 @@ class GoogleEarthEngineService
             return $cached->data;
         }
 
-        // Authenticate if needed
-        if (!$this->accessToken && !$this->authenticate()) {
-            throw new Exception('Failed to authenticate with Google Earth Engine');
-        }
-
         try {
+            // Use Python GEE service for all computations - never use mock data
+            $pythonServiceUrl = config('services.gee.url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            
             // Convert geometry to GeoJSON
             $geometry = $this->convertGeometryToGeoJSON($area);
-            $bbox = $this->calculateBoundingBox($geometry);
-
-            // NOTE: GEE REST API is complex and requires specific format
-            // For production, use GEE Python API or pre-computed rasters
-            // This version generates statistics that follow GEE data patterns
-            $stats = $this->computeRUSLEStatistics($geometry, $area, $year, $period);
+            
+            Log::info('Computing erosion via Python service', [
+                'area' => $area->name_en,
+                'year' => $year,
+                'period' => $period
+            ]);
+            
+            // Get all factors and soil erosion from Python service
+            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+                'area_geometry' => $geometry,
+                'year' => $year,
+                'factors' => 'all',
+                'scale' => 100
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute RUSLE factors',
+                    $result
+                );
+            }
+            
+            $data = $result['data'];
+            $factors = $data['factors'] ?? [];
+            $soilErosion = $data['soil_erosion'] ?? null;
+            
+            // Validate that we have real data - throw error if missing
+            if (empty($factors)) {
+                throw GoogleEarthEngineException::noDataAvailable(
+                    $area->name_en,
+                    $year,
+                    ['message' => 'No factor data returned from Python service']
+                );
+            }
+            
+            if (!$soilErosion) {
+                throw GoogleEarthEngineException::noDataAvailable(
+                    $area->name_en,
+                    $year,
+                    ['message' => 'No soil erosion data returned from Python service']
+                );
+            }
+            
+            // Build statistics array with real data only
+            $totalArea = $area->area_km2 * 100; // Convert to hectares
+            $meanErosion = $soilErosion['mean'] ?? null;
+            $minErosion = $soilErosion['min'] ?? null;
+            $maxErosion = $soilErosion['max'] ?? null;
+            $stdDev = $soilErosion['std_dev'] ?? null;
+            
+            // Validate required statistics
+            if ($meanErosion === null || $minErosion === null || $maxErosion === null) {
+                throw GoogleEarthEngineException::noDataAvailable(
+                    $area->name_en,
+                    $year,
+                    ['message' => 'Incomplete soil erosion statistics from Python service']
+                );
+            }
+            
+            $cv = $stdDev ? ($stdDev / $meanErosion * 100) : 0;
+            
+            $stats = [
+                'tiles' => null,
+                'statistics' => [
+                    'mean_erosion_rate' => round($meanErosion, 2),
+                    'min_erosion_rate' => round($minErosion, 2),
+                    'max_erosion_rate' => round($maxErosion, 2),
+                    'erosion_cv' => round($cv, 1),
+                    'bare_soil_frequency' => null, // Not provided by Python service
+                    'sustainability_factor' => null, // Not provided by Python service
+                    'rainfall_slope' => null, // Would be calculated from time series
+                    'rainfall_cv' => null, // Would be calculated from time series
+                    'total_area' => $totalArea,
+                    'severity_distribution' => [], // Would need histogram data
+                    'rusle_factors' => [
+                        'r' => $factors['r']['mean'] ?? null,
+                        'k' => $factors['k']['mean'] ?? null,
+                        'ls' => $factors['ls']['mean'] ?? null,
+                        'c' => $factors['c']['mean'] ?? null,
+                        'p' => $factors['p']['mean'] ?? null,
+                    ],
+                    'top_eroding_areas' => [],
+                ],
+                'source' => 'python_gee_service',
+                'timestamp' => now()->toIso8601String(),
+                'factors' => $factors,
+            ];
             
             // Cache the result
             $this->cacheResult($area, $year, $period, $stats);
 
             return $stats;
-        } catch (Exception $e) {
+        } catch (GoogleEarthEngineException $e) {
             Log::error('GEE computation error', [
                 'area' => $area->name_en,
                 'year' => $year,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
+        } catch (Exception $e) {
+            Log::error('GEE computation error', [
+                'area' => $area->name_en,
+                'year' => $year,
+                'error' => $e->getMessage(),
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to compute erosion: " . $e->getMessage(),
+                [],
+                $e
+            );
         }
     }
 
@@ -207,39 +319,96 @@ class GoogleEarthEngineService
      */
     public function analyzeGeometry(array $geometry, int $year): array
     {
-        // Authenticate if needed
-        if (!$this->accessToken && !$this->authenticate()) {
-            throw new Exception('Failed to authenticate with Google Earth Engine');
-        }
-
         try {
-            $requestBody = [
-                'expression' => [
-                    'expression' => $this->buildRUSLEExpression($year, 'annual')
-                ],
-                'fileFormat' => 'GEO_TIFF',
-                'region' => $geometry,
-            ];
-
-            $response = Http::withToken($this->accessToken)
-                ->post("{$this->baseUrl}/projects/{$this->projectId}/image:computePixels", $requestBody);
-
-            if (!$response->successful()) {
-                throw new Exception('GEE geometry analysis failed: ' . $response->body());
-            }
-
-            $result = $response->json();
-
-            // Process result with comprehensive statistics
-            // Create a mock area object for processing
-            $mockArea = new \stdClass();
-            $mockArea->area_km2 = $this->calculateAreaFromGeometry($geometry);
-            $mockArea->name_en = 'Custom Area';
+            // Get Python GEE service URL
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
             
-            return $this->processRUSLEResult($result, $mockArea, $year);
-        } catch (Exception $e) {
-            Log::error('GEE geometry analysis error', ['error' => $e->getMessage()]);
+            // Call Python GEE service
+            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/compute", [
+                'area_geometry' => $geometry,
+                'year' => $year
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to analyze geometry',
+                    $result
+                );
+            }
+            
+            // Create a temporary area object for compatibility
+            $tempArea = new \stdClass();
+            $tempArea->area_km2 = $this->calculateAreaFromGeometry($geometry);
+            $tempArea->name_en = 'Custom Area';
+            
+            // Get individual factors from Python service
+            $factorsResponse = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+                'area_geometry' => $geometry,
+                'year' => $year,
+                'factors' => 'all',
+                'scale' => 100
+            ]);
+            
+            $factorsData = null;
+            if ($factorsResponse->successful()) {
+                $factorsResult = $factorsResponse->json();
+                if ($factorsResult['success'] && isset($factorsResult['data']['factors'])) {
+                    $factorsData = $factorsResult['data']['factors'];
+                }
+            }
+            
+            // Return in expected format - use real data or throw error
+            if (!$factorsData) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    "Failed to retrieve RUSLE factors from Python service",
+                    []
+                );
+            }
+            
+            return [
+                'soil_loss' => $result['data']['statistics']['mean'] ?? null,
+                'r_factor' => $factorsData['r']['mean'] ?? null,
+                'k_factor' => $factorsData['k']['mean'] ?? null,
+                'ls_factor' => $factorsData['ls']['mean'] ?? null,
+                'c_factor' => $factorsData['c']['mean'] ?? null,
+                'p_factor' => $factorsData['p']['mean'] ?? null,
+                'area_km2' => $tempArea->area_km2,
+                'statistics' => $result['data']['statistics'],
+                'factors' => $factorsData,
+                'year' => $year,
+                'source' => 'python_gee_service'
+            ];
+            
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('GEE geometry analysis error', [
+                'year' => $year,
+                'error' => $e->getMessage()
+            ]);
             throw $e;
+        } catch (Exception $e) {
+            Log::error('GEE geometry analysis error', [
+                'year' => $year,
+                'error' => $e->getMessage()
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to analyze geometry: " . $e->getMessage(),
+                [],
+                $e
+            );
         }
     }
 
@@ -314,74 +483,260 @@ class GoogleEarthEngineService
 
     /**
      * Get Rainfall Slope/Trend (temporal change in rainfall).
+     * Uses Python GEE service for actual computation.
      */
     public function getRainfallSlope(Region|District $area, int $startYear, int $endYear): array
     {
-        // For now, return mock data since GEE REST API has limitations with complex expressions
-        // In production, this would use the GEE Python API or pre-computed rasters
-        
         try {
+            // Get Python GEE service URL
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            
+            // Convert area geometry to GeoJSON
             $geometry = $this->convertGeometryToGeoJSON($area);
-            $bbox = $this->calculateBoundingBox($geometry);
             
-            // Generate realistic rainfall slope data based on area and year range
-            $yearRange = $endYear - $startYear + 1;
-            $baseSlope = -2.5 + (($endYear - 2020) * 0.3); // Slight trend based on end year
-            $areaFactor = $area->area_km2 ? min(2.0, max(0.5, $area->area_km2 / 10000)) : 1.0;
+            Log::info('Computing rainfall slope via Python service', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+            ]);
             
-            $meanSlope = $baseSlope * $areaFactor;
-            $stdDev = abs($meanSlope) * 0.4;
+            // Call Python GEE service
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope", [
+                'area_geometry' => $geometry,
+                'start_year' => $startYear,
+                'end_year' => $endYear
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute rainfall slope',
+                    $result
+                );
+            }
+            
+            $data = $result['data'];
             
             return [
-                'mean' => $meanSlope,
-                'min' => $meanSlope - $stdDev,
-                'max' => $meanSlope + $stdDev,
-                'stdDev' => $stdDev,
-                'yearRange' => $yearRange,
-                'startYear' => $startYear,
-                'endYear' => $endYear,
+                'mean' => $data['mean'],
+                'min' => $data['min'],
+                'max' => $data['max'],
+                'stdDev' => $data['std_dev'],
+                'yearRange' => $data['year_range'],
+                'startYear' => $data['start_year'],
+                'endYear' => $data['end_year'],
                 'area' => $area->name_en,
-                'source' => 'mock_data'
+                'unit' => $data['unit'] ?? 'mm/year per year',
+                'interpretation' => $data['interpretation'] ?? '',
+                'source' => 'gee_python_service'
             ];
-        } catch (Exception $e) {
-            Log::error('Rainfall slope error', ['error' => $e->getMessage()]);
+            
+        } catch (GoogleEarthEngineException $e) {
             throw $e;
+        } catch (Exception $e) {
+            Log::error('Rainfall slope computation error', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'error' => $e->getMessage(),
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to compute rainfall slope: " . $e->getMessage(),
+                [],
+                $e
+            );
         }
     }
 
     /**
      * Get Rainfall Coefficient of Variation (CV).
+     * Uses Python GEE service for actual computation.
      */
     public function getRainfallCV(Region|District $area, int $startYear, int $endYear): array
     {
-        // For now, return mock data since GEE REST API has limitations with complex expressions
-        // In production, this would use the GEE Python API or pre-computed rasters
-        
         try {
+            // Get Python GEE service URL
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            
+            // Convert area geometry to GeoJSON
             $geometry = $this->convertGeometryToGeoJSON($area);
-            $bbox = $this->calculateBoundingBox($geometry);
             
-            // Generate realistic rainfall CV data based on area and year range
-            $yearRange = $endYear - $startYear + 1;
-            $baseCV = 18 + (($endYear - 2020) * 0.5); // Slight variation based on end year
-            $areaFactor = $area->area_km2 ? min(1.5, max(0.8, $area->area_km2 / 15000)) : 1.0;
+            Log::info('Computing rainfall CV via Python service', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+            ]);
             
-            $meanCV = $baseCV * $areaFactor;
-            $stdDev = $meanCV * 0.2;
+            // Call Python GEE service
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv", [
+                'area_geometry' => $geometry,
+                'start_year' => $startYear,
+                'end_year' => $endYear
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute rainfall CV',
+                    $result
+                );
+            }
+            
+            $data = $result['data'];
             
             return [
-                'mean' => $meanCV,
-                'min' => max(5, $meanCV - $stdDev),
-                'max' => min(50, $meanCV + $stdDev),
-                'stdDev' => $stdDev,
-                'yearRange' => $yearRange,
-                'startYear' => $startYear,
-                'endYear' => $endYear,
+                'mean' => $data['mean'],
+                'min' => $data['min'],
+                'max' => $data['max'],
+                'stdDev' => $data['std_dev'],
+                'yearRange' => $data['year_range'],
+                'startYear' => $data['start_year'],
+                'endYear' => $data['end_year'],
                 'area' => $area->name_en,
-                'source' => 'mock_data'
+                'unit' => $data['unit'] ?? 'percent (%)',
+                'interpretation' => $data['interpretation'] ?? '',
+                'source' => 'gee_python_service'
             ];
+            
+        } catch (GoogleEarthEngineException $e) {
+            throw $e;
         } catch (Exception $e) {
-            Log::error('Rainfall CV error', ['error' => $e->getMessage()]);
+            Log::error('Rainfall CV computation error', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'error' => $e->getMessage(),
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to compute rainfall CV: " . $e->getMessage(),
+                [],
+                $e
+            );
+        }
+    }
+    
+    /**
+     * Get rainfall CV grid data for visualization.
+     */
+    public function getRainfallCVGrid(Region|District $area, int $startYear, int $endYear): array
+    {
+        try {
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            $geometry = $this->convertGeometryToGeoJSON($area);
+            
+            Log::info('Computing rainfall CV grid via Python service', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+            ]);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv-grid", [
+                'area_geometry' => $geometry,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'grid_size' => 50
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute rainfall CV grid',
+                    $result
+                );
+            }
+            
+            return $result['data'];
+        } catch (Exception $e) {
+            Log::error('Rainfall CV grid computation error', [
+                'area' => $area->name_en,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get rainfall slope grid data for visualization.
+     */
+    public function getRainfallSlopeGrid(Region|District $area, int $startYear, int $endYear): array
+    {
+        try {
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            $geometry = $this->convertGeometryToGeoJSON($area);
+            
+            Log::info('Computing rainfall slope grid via Python service', [
+                'area' => $area->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+            ]);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope-grid", [
+                'area_geometry' => $geometry,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'grid_size' => 50
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute rainfall slope grid',
+                    $result
+                );
+            }
+            
+            return $result['data'];
+        } catch (Exception $e) {
+            Log::error('Rainfall slope grid computation error', [
+                'area' => $area->name_en,
+                'error' => $e->getMessage(),
+            ]);
             throw $e;
         }
     }
@@ -391,14 +746,10 @@ class GoogleEarthEngineService
      */
     private function getLayerData(Region|District $area, int $year, string $band): array
     {
-        // Get full RUSLE computation (from cache if available)
-        $rusleData = $this->computeErosionForArea($area, $year, 'annual');
-
-
-        // Extract the specific band from RUSLE factors
-        $rusleFactors = $rusleData['statistics']['rusle_factors'] ?? [];
+        // Use Python service for factor calculations - never use mock data
+        $pythonServiceUrl = config('services.gee.url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
         
-        // Map band names to RUSLE factor keys
+        // Map band names to factor keys
         $bandMapping = [
             'r_factor' => 'r',
             'k_factor' => 'k', 
@@ -407,36 +758,78 @@ class GoogleEarthEngineService
             'p_factor' => 'p'
         ];
         
-        $rusleKey = $bandMapping[$band] ?? $band;
-        $bandValue = $rusleFactors[$rusleKey] ?? 0;
-        
-        // If no RUSLE factors found, generate realistic mock data for the specific factor
-        if (empty($rusleFactors)) {
-            $mockValues = [
-                'r_factor' => 95 + (sin($year * 0.3) * 25), // 70-120 range
-                'k_factor' => 0.20 + (cos($year * 0.2) * 0.08), // 0.12-0.28 range
-                'ls_factor' => 2.5 + (($area->area_km2 ?? 100) * 0.01), // Varies with topography
-                'c_factor' => 0.25 + (sin($year * 0.4) * 0.15), // 0.10-0.40 range
-                'p_factor' => 0.40 + (cos($year * 0.3) * 0.10), // 0.30-0.50 range
-            ];
-            $bandValue = $mockValues[$band] ?? 0;
+        $factorKey = $bandMapping[$band] ?? null;
+        if (!$factorKey) {
+            throw GoogleEarthEngineException::apiRequestFailed(
+                400,
+                "Invalid factor band: {$band}",
+                []
+            );
         }
         
-        // Generate realistic statistics for the specific factor
-        $mean = $bandValue;
-        $stdDev = $mean * 0.2; // 20% variation
-        $min = max(0, $mean - ($stdDev * 2));
-        $max = $mean + ($stdDev * 2);
+        // Convert area geometry to GeoJSON
+        $geometry = $this->convertGeometryToGeoJSON($area);
+        
+        Log::info("Fetching {$band} from Python service", [
+            'area' => $area->name_en,
+            'year' => $year,
+            'factor' => $factorKey
+        ]);
+        
+        // Call Python service for specific factor
+        $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+            'area_geometry' => $geometry,
+            'year' => $year,
+            'factors' => [$factorKey],  // Request only the specific factor
+            'scale' => 100
+        ]);
+        
+        if (!$response->successful()) {
+            $error = $response->json() ?? [];
+            throw GoogleEarthEngineException::apiRequestFailed(
+                $response->status(),
+                $error['error'] ?? "Failed to retrieve {$band} from Python service",
+                $error
+            );
+        }
+        
+        $result = $response->json();
+        
+        if (!$result['success']) {
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                $result['error'] ?? "Failed to compute {$band}",
+                $result
+            );
+        }
+        
+        $factors = $result['data']['factors'] ?? [];
+        $factorData = $factors[$factorKey] ?? null;
+        
+        // If factor data not found, throw error - never return mock data
+        if (!$factorData || $factorData['mean'] === null) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en,
+                $year,
+                [
+                    'band' => $band,
+                    'factor' => $factorKey,
+                    'message' => "Factor '{$factorKey}' data not available from Python service"
+                ]
+            );
+        }
         
         return [
             'layer' => $band,
-            'mean' => round($mean, 3),
-            'min' => round($min, 3),
-            'max' => round($max, 3),
-            'stdDev' => round($stdDev, 3),
+            'mean' => $factorData['mean'],
+            'min' => $factorData['min'],
+            'max' => $factorData['max'],
+            'stdDev' => $factorData['std_dev'],
             'year' => $year,
             'area' => $area->name_en,
-            'source' => 'mock_data'
+            'unit' => $factorData['unit'] ?? '',
+            'description' => $factorData['description'] ?? '',
+            'source' => 'python_gee_service'
         ];
     }
 
@@ -444,7 +837,7 @@ class GoogleEarthEngineService
      * Get detailed erosion grid data for selected area.
      * Returns aggregated pixel data in a grid format for detailed visualization.
      */
-    public function getDetailedErosionGrid(Region|District $area, int $year, int $gridSize = 10): array
+    public function getDetailedErosionGrid(Region|District $area, int $year, int $gridSize = 50): array
     {
         // Check cache first
         $cacheKey = "detailed_grid_{$area->id}_{$year}_{$gridSize}";
@@ -454,114 +847,127 @@ class GoogleEarthEngineService
             return $cached;
         }
 
-        // Authenticate if needed
-        if (!$this->accessToken && !$this->authenticate()) {
-            throw new Exception('Failed to authenticate with Google Earth Engine');
-        }
-
         try {
+            // Get Python GEE service URL
+            $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+            
+            // Convert area geometry to GeoJSON
             $geometry = $this->convertGeometryToGeoJSON($area);
-            $bbox = $this->calculateBoundingBox($geometry);
-
-            // For now, use mock data due to GEE REST API limitations with complex expressions
-            // TODO: Implement proper GEE Python API integration for complex computations
-            Log::info('Using mock detailed grid data due to GEE REST API limitations', [
+            
+            // Simplify complex geometries to improve performance
+            $geometry = $this->simplifyGeometry($geometry);
+            
+            // Log geometry being sent
+            Log::info('Sending geometry to Python service', [
                 'area' => $area->name_en,
+                'geometry_type' => $geometry['type'] ?? 'unknown',
+                'has_coordinates' => isset($geometry['coordinates']),
+                'coordinate_count' => $this->countCoordinates($geometry)
+            ]);
+            
+            // Pre-calculate bounding box to avoid GEE timeout on complex geometries
+            $bbox = $this->calculateBoundingBox($geometry);
+            
+            Log::info('Pre-calculated bounding box', ['bbox' => $bbox]);
+            
+            Log::info('Calling Python GEE service with pre-calculated bbox', [
+                'url' => "{$pythonServiceUrl}/api/rusle/detailed-grid",
+                'pythonServiceUrl' => $pythonServiceUrl,
+                'geometry' => $geometry,
                 'year' => $year,
-                'gridSize' => $gridSize
+                'grid_size' => $gridSize,
+                'bbox' => $bbox
             ]);
 
-            $gridData = $this->generateMockDetailedGrid($area, $year, $gridSize, $bbox, $geometry);
-
+            // Call Python GEE service with pre-calculated bbox
+            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/detailed-grid", [
+                'area_geometry' => $geometry,
+                'year' => $year,
+                'grid_size' => $gridSize,
+                'bbox' => $bbox  // Send pre-calculated bbox to skip GEE bbox calculation
+            ]);
+            
+            Log::info('Received response from Python service', [
+                'status' => $response->status(),
+                'successful' => $response->successful()
+            ]);
+            
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                Log::error('Python service error response', ['error' => $error]);
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+            
+            $result = $response->json();
+            
+            Log::info('Parsed Python service response', [
+                'success' => $result['success'] ?? false,
+                'has_data' => isset($result['data']),
+                'cell_count' => $result['data']['cell_count'] ?? 0
+            ]);
+            
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute detailed grid',
+                    $result ?? []
+                );
+            }
+            
+            $gridData = $result['data'];
+            
             // Cache for 1 hour
             Cache::put($cacheKey, $gridData, 3600);
-
+            
+            Log::info('Detailed grid cached successfully', [
+                'cell_count' => count($gridData['cells'] ?? [])
+            ]);
+            
             return $gridData;
-
+            
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Detailed grid generation error', [
+                'area' => $area->name_en,
+                'year' => $year,
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+            ]);
+            throw $e;
         } catch (Exception $e) {
             Log::error('Detailed grid generation error', [
                 'area' => $area->name_en,
                 'year' => $year,
                 'error' => $e->getMessage(),
             ]);
-            
-            // Return empty grid on error instead of throwing
-            return $this->generateEmptyGrid($gridSize);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to retrieve detailed grid data: " . $e->getMessage(),
+                [],
+                $e
+            );
         }
     }
 
     /**
-     * Generate mock detailed grid data for visualization
-     */
-    private function generateMockDetailedGrid(Region|District $area, int $year, int $gridSize, array $bbox, array $geometry): array
-    {
-        $gridData = [];
-        $cellWidth = ($bbox[2] - $bbox[0]) / $gridSize;
-        $cellHeight = ($bbox[3] - $bbox[1]) / $gridSize;
-
-        // Generate realistic erosion values based on area characteristics
-        $baseErosion = $this->getBaseErosionForArea($area, $year);
-        
-        for ($i = 0; $i < $gridSize; $i++) {
-            for ($j = 0; $j < $gridSize; $j++) {
-                $x = $bbox[0] + ($i + 0.5) * $cellWidth;
-                $y = $bbox[1] + ($j + 0.5) * $cellHeight;
-                
-                // Add spatial variation based on position
-                $spatialFactor = sin($i / $gridSize * M_PI) * cos($j / $gridSize * M_PI);
-                $erosionRate = $baseErosion * (1 + $spatialFactor * 0.5);
-                
-                // Add some randomness
-                $erosionRate *= (0.8 + (rand(0, 40) / 100));
-                
-                // Ensure realistic range
-                $erosionRate = max(0, min(100, $erosionRate));
-                
-                $gridData[] = [
-                    'x' => $x,
-                    'y' => $y,
-                    'erosion_rate' => round($erosionRate, 2),
-                    'cell_id' => $i * $gridSize + $j
-                ];
-            }
-        }
-
-        return $gridData;
-    }
-
-    /**
-     * Get base erosion rate for an area based on its characteristics
-     */
-    private function getBaseErosionForArea(Region|District $area, int $year): float
-    {
-        // Base erosion rates by area type and year
-        $baseRates = [
-            'region' => 15.0,
-            'district' => 12.0,
-        ];
-        
-        $baseRate = $baseRates[get_class($area) === Region::class ? 'region' : 'district'] ?? 10.0;
-        
-        // Add year variation
-        $yearFactor = 1 + (($year - 2020) * 0.02);
-        
-        // Add area-specific variation based on name
-        $nameFactor = 1.0;
-        if (str_contains(strtolower($area->name_en), 'mountain')) {
-            $nameFactor = 1.5; // Higher erosion in mountainous areas
-        } elseif (str_contains(strtolower($area->name_en), 'valley')) {
-            $nameFactor = 0.8; // Lower erosion in valleys
-        }
-        
-        return $baseRate * $yearFactor * $nameFactor;
-    }
-
-    /**
-     * Generate empty grid for error cases
+     * Generate empty grid structure for error cases
      */
     private function generateEmptyGrid(int $gridSize): array
     {
-        return [];
+        return [
+            'cells' => [],
+            'statistics' => [
+                'mean' => 0,
+                'min' => 0,
+                'max' => 0,
+                'stdDev' => 0,
+            ],
+            'grid_size' => $gridSize,
+            'bbox' => null,
+        ];
     }
 
     /**
@@ -569,17 +975,43 @@ class GoogleEarthEngineService
      */
     public function getAvailableYears(Region|District $area): array
     {
-        // For now, return a simple range of years that are typically available
-        // In a production environment, this would query GEE for actual available years
-        $availableYears = range(2016, 2024);
-        
-        return [
-            'available_years' => $availableYears,
-            'oldest_year' => 2016,
-            'newest_year' => 2024,
-            'total_years' => count($availableYears),
-            'source' => 'static_range'
-        ];
+        try {
+            if (!$this->accessToken) {
+                $this->authenticate();
+            }
+
+            $geometry = $this->convertGeometryToGeoJSON($area);
+            $expression = $this->buildAvailableYearsExpression($geometry);
+
+            $requestBody = [
+                'expression' => $expression,
+                'fileFormat' => 'JSON',
+            ];
+
+            $response = Http::withToken($this->accessToken)
+                ->timeout(600)
+                ->post("{$this->baseUrl}/projects/{$this->projectId}/image:computeStatistics", $requestBody);
+
+            if (!$response->successful()) {
+                // Fallback to known range if GEE query fails
+                Log::warning('Failed to query available years from GEE, using fallback range', [
+                    'area' => $area->name_en,
+                    'error' => $response->body(),
+                ]);
+                return $this->processAvailableYears([]);
+            }
+
+            $result = $response->json();
+            return $this->processAvailableYears($result);
+            
+        } catch (Exception $e) {
+            Log::warning('Error querying available years from GEE, using fallback range', [
+                'area' => $area->name_en,
+                'error' => $e->getMessage(),
+            ]);
+            // Return fallback years instead of throwing - this is a non-critical operation
+            return $this->processAvailableYears([]);
+        }
     }
 
     /**
@@ -991,19 +1423,31 @@ class GoogleEarthEngineService
     
     /**
      * Calculate bounding box from geometry coordinates
+     * Supports both Polygon and MultiPolygon types
      */
     private function calculateBoundingBox(array $geometry): array
     {
-        $coords = $geometry['coordinates'][0] ?? [];
+        $allCoords = [];
         
-        if (empty($coords)) {
+        if ($geometry['type'] === 'Polygon') {
+            $allCoords = $geometry['coordinates'][0] ?? [];
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            // Collect all coordinates from all polygons
+            foreach ($geometry['coordinates'] as $polygon) {
+                if (isset($polygon[0])) {
+                    $allCoords = array_merge($allCoords, $polygon[0]);
+                }
+            }
+        }
+        
+        if (empty($allCoords)) {
             return [68.0, 36.0, 75.0, 41.0]; // Default Tajikistan bounds
         }
         
-        $minLon = $maxLon = (float)$coords[0][0];
-        $minLat = $maxLat = (float)$coords[0][1];
+        $minLon = $maxLon = (float)$allCoords[0][0];
+        $minLat = $maxLat = (float)$allCoords[0][1];
         
-        foreach ($coords as $coord) {
+        foreach ($allCoords as $coord) {
             if (!is_array($coord) || count($coord) < 2) {
                 continue;
             }
@@ -1045,97 +1489,109 @@ class GoogleEarthEngineService
     }
 
     /**
-     * Compute RUSLE statistics.
-     * NOTE: This uses authenticated GEE access and generates statistics based on
-     * environmental/geographic data. For pixel-level computation, use GEE Python API.
+     * Compute RUSLE statistics using real GEE API.
      */
     private function computeRUSLEStatistics(array $geometry, $area, int $year, string $period): array
     {
-        // Calculate area-based statistics
-        // In production, this would call GEE Python API or use pre-computed rasters
-        $areaKm2 = $area->area_km2 ?? 100;
-        $totalArea = $areaKm2 * 100; // hectares
-        
-        // Generate realistic RUSLE statistics based on Tajikistan's conditions
-        // These ranges are based on actual RUSLE studies in Central Asia
-        $baseErosion = 12 + ($areaKm2 * 0.05); // Larger areas tend to have more variation
-        $yearFactor = sin(($year - 2020) * 0.5) * 3; // Temporal variation
-        $meanErosion = min(60, max(3, $baseErosion + $yearFactor));
-        
-        // Calculate other statistics
-        $stdDev = $meanErosion * 0.6; // Typical CV around 60%
-        $minErosion = max(0.5, $meanErosion - ($stdDev * 2));
-        $maxErosion = min(100, $meanErosion + ($stdDev * 2.5));
-        $cv = ($stdDev / $meanErosion) * 100;
-        
-        // RUSLE factors (typical ranges for Tajikistan)
-        $rFactor = 95 + (sin($year * 0.3) * 25); // 70-120 range
-        $kFactor = 0.20 + (cos($year * 0.2) * 0.08); // 0.12-0.28 range
-        $lsFactor = 2.5 + ($areaKm2 * 0.01); // Varies with topography
-        $cFactor = 0.25 + (sin($year * 0.4) * 0.15); // 0.10-0.40 range
-        $pFactor = 0.40 + (cos($year * 0.3) * 0.10); // 0.30-0.50 range
-        
-        // Other metrics
-        $bareSoilFreq = min(50, max(5, 18 + ($year - 2020) * 1.5));
-        $sustainability = max(0.3, min(0.95, 0.85 - ($meanErosion / 50)));
-        
-        // Calculate severity distribution
-        $severityDist = $this->calculateSeverityDistribution($meanErosion, $totalArea, []);
-        
-        $result = [
-            'tiles' => null,
-            'statistics' => [
-                'mean_erosion_rate' => round($meanErosion, 2),
-                'min_erosion_rate' => round($minErosion, 2),
-                'max_erosion_rate' => round($maxErosion, 2),
-                'erosion_cv' => round($cv, 1),
-                'bare_soil_frequency' => round($bareSoilFreq, 1),
-                'sustainability_factor' => round($sustainability, 2),
-                'rainfall_slope' => round((sin($year * 0.1) * 4) - 1, 2), // -5 to +3% range
-                'rainfall_cv' => round(22 + (cos($year * 0.2) * 8), 1), // 14-30% range
-                'total_area' => $totalArea,
-                'severity_distribution' => $severityDist,
-                'rusle_factors' => [
-                    'r' => round($rFactor, 2),
-                    'k' => round($kFactor, 3),
-                    'ls' => round($lsFactor, 2),
-                    'c' => round($cFactor, 3),
-                    'p' => round($pFactor, 3),
-                ],
-                'top_eroding_areas' => [],
-            ],
-            'source' => 'GEE_AUTHENTICATED', // Indicates this used GEE auth
-            'timestamp' => now()->toIso8601String(),
-        ];
-        
-        return $result;
+        try {
+            if (!$this->accessToken) {
+                $this->authenticate();
+            }
+
+            $expression = $this->buildRUSLEExpression($year, $period);
+
+            $requestBody = [
+                'expression' => $expression,
+                'fileFormat' => 'JSON',
+            ];
+
+            $response = Http::withToken($this->accessToken)
+                ->timeout(600)
+                ->post("{$this->baseUrl}/projects/{$this->projectId}/image:computeStatistics", $requestBody);
+
+            if (!$response->successful()) {
+                $errorBody = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $errorBody['error']['message'] ?? $response->body(),
+                    $errorBody,
+                    new Exception($response->body())
+                );
+            }
+
+            $result = $response->json();
+            
+            // Process the real GEE result
+            return $this->processRUSLEResult($result, $area, $year);
+            
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('RUSLE statistics computation error', [
+                'area' => $area->name_en ?? 'unknown',
+                'year' => $year,
+                'period' => $period,
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+            ]);
+            throw $e;
+        } catch (Exception $e) {
+            Log::error('RUSLE statistics computation error', [
+                'area' => $area->name_en ?? 'unknown',
+                'year' => $year,
+                'period' => $period,
+                'error' => $e->getMessage(),
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to compute RUSLE statistics: " . $e->getMessage(),
+                [],
+                $e
+            );
+        }
     }
 
     /**
      * Process GEE RUSLE result to extract comprehensive statistics.
      */
-    private function processRUSLEResult(array $geeResult, Region|District $area, int $year): array
+    private function processRUSLEResult(array $geeResult, Region|District|\stdClass $area, int $year): array
     {
-        // Extract band statistics from GEE response
+        // Extract band statistics from GEE response - never use defaults, throw error if missing
         $props = $geeResult['properties'] ?? $geeResult;
         
-        // Extract main erosion statistics
-        $meanErosion = $props['soil_erosion_hazard_mean'] ?? $props['mean'] ?? 15;
-        $minErosion = $props['soil_erosion_hazard_min'] ?? $props['min'] ?? ($meanErosion * 0.2);
-        $maxErosion = $props['soil_erosion_hazard_max'] ?? $props['max'] ?? ($meanErosion * 3);
-        $stdDev = $props['soil_erosion_hazard_stdDev'] ?? $props['stdDev'] ?? ($meanErosion * 0.5);
-        $cv = $stdDev / $meanErosion * 100;
+        // Extract main erosion statistics - throw error if missing
+        $meanErosion = $props['soil_erosion_hazard_mean'] ?? $props['mean'] ?? null;
+        $minErosion = $props['soil_erosion_hazard_min'] ?? $props['min'] ?? null;
+        $maxErosion = $props['soil_erosion_hazard_max'] ?? $props['max'] ?? null;
+        $stdDev = $props['soil_erosion_hazard_stdDev'] ?? $props['stdDev'] ?? null;
         
-        // Extract RUSLE factors
-        $rFactor = $props['r_factor_mean'] ?? 120;
-        $kFactor = $props['k_factor_mean'] ?? 0.25;
-        $lsFactor = $props['ls_factor_mean'] ?? 3.5;
-        $cFactor = $props['c_factor_mean'] ?? 0.35;
-        $pFactor = $props['p_factor_mean'] ?? 0.45;
+        // Validate required statistics - throw error if missing
+        if ($meanErosion === null) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en ?? 'unknown',
+                $year,
+                ['message' => 'Mean erosion rate not available from GEE response']
+            );
+        }
         
-        // Extract other metrics
-        $bareSoilFrequency = $props['bare_soil_frequency_mean'] ?? 15;
-        $sustainability = $props['sustainability_factor_mean'] ?? 0.7;
+        if ($minErosion === null || $maxErosion === null) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en ?? 'unknown',
+                $year,
+                ['message' => 'Min/max erosion rates not available from GEE response']
+            );
+        }
+        
+        $cv = $stdDev ? ($stdDev / $meanErosion * 100) : null;
+        
+        // Extract RUSLE factors - throw error if missing
+        $rFactor = $props['r_factor_mean'] ?? null;
+        $kFactor = $props['k_factor_mean'] ?? null;
+        $lsFactor = $props['ls_factor_mean'] ?? null;
+        $cFactor = $props['c_factor_mean'] ?? null;
+        $pFactor = $props['p_factor_mean'] ?? null;
+        
+        // Extract other metrics - allow null if not available
+        $bareSoilFrequency = $props['bare_soil_frequency_mean'] ?? null;
+        $sustainability = $props['sustainability_factor_mean'] ?? null;
         
         // Calculate severity distribution based on erosion thresholds
         $totalArea = $area->area_km2 * 100; // Convert to hectares
@@ -1144,30 +1600,42 @@ class GoogleEarthEngineService
         // Calculate top eroding sub-areas (would be from spatial analysis in production)
         $topErodingAreas = $this->extractTopErodingAreas($geeResult, $area);
         
-        return [
-            'tiles' => $geeResult['tiles'] ?? null,
-            'statistics' => [
-                'mean_erosion_rate' => round($meanErosion, 2),
-                'min_erosion_rate' => round($minErosion, 2),
-                'max_erosion_rate' => round($maxErosion, 2),
-                'erosion_cv' => round($cv, 1),
-                'bare_soil_frequency' => round($bareSoilFrequency, 1),
-                'sustainability_factor' => round($sustainability, 2),
-                'rainfall_slope' => 0, // Would be calculated from time series
-                'rainfall_cv' => 0, // Would be calculated from time series
-                'total_area' => $totalArea,
-                'severity_distribution' => $severityDistribution,
-                'rusle_factors' => [
-                    'r' => round($rFactor, 2),
-                    'k' => round($kFactor, 3),
-                    'ls' => round($lsFactor, 2),
-                    'c' => round($cFactor, 3),
-                    'p' => round($pFactor, 3),
+            // Validate RUSLE factors - throw error if missing
+            if ($rFactor === null || $kFactor === null || $lsFactor === null || 
+                $cFactor === null || $pFactor === null) {
+                throw GoogleEarthEngineException::noDataAvailable(
+                    $area->name_en ?? 'unknown',
+                    $year,
+                    ['message' => 'RUSLE factors not available from GEE response']
+                );
+            }
+            
+            return [
+                'tiles' => $geeResult['tiles'] ?? null,
+                'statistics' => [
+                    'mean_erosion_rate' => round($meanErosion, 2),
+                    'min_erosion_rate' => round($minErosion, 2),
+                    'max_erosion_rate' => round($maxErosion, 2),
+                    'erosion_cv' => $cv ? round($cv, 1) : null,
+                    'bare_soil_frequency' => $bareSoilFrequency ? round($bareSoilFrequency, 1) : null,
+                    'sustainability_factor' => $sustainability ? round($sustainability, 2) : null,
+                    'rainfall_slope' => null, // Would be calculated from time series
+                    'rainfall_cv' => null, // Would be calculated from time series
+                    'total_area' => $totalArea,
+                    'severity_distribution' => $severityDistribution,
+                    'rusle_factors' => [
+                        'r' => round($rFactor, 2),
+                        'k' => round($kFactor, 3),
+                        'ls' => round($lsFactor, 2),
+                        'c' => round($cFactor, 3),
+                        'p' => round($pFactor, 3),
+                    ],
+                    'top_eroding_areas' => $topErodingAreas,
                 ],
-                'top_eroding_areas' => $topErodingAreas,
-            ],
-            'raw_gee_data' => $geeResult,
-        ];
+                'source' => 'gee_api',
+                'timestamp' => now()->toIso8601String(),
+                'raw_gee_data' => $geeResult,
+            ];
     }
 
     /**
@@ -1180,8 +1648,10 @@ class GoogleEarthEngineService
         $histogram = $geeResult['histogram'] ?? null;
         
         if ($histogram) {
-            // Use actual histogram from GEE
-            return $this->processHistogramToSeverityClasses($histogram, $totalArea);
+            // Use actual histogram from GEE - process histogram data directly
+            // If histogram format is available, extract severity classes from it
+            // For now, fall through to statistical estimation
+            // TODO: Implement histogram processing when GEE provides histogram format
         }
         
         // Estimate distribution based on mean and standard deviation
@@ -1385,8 +1855,8 @@ class GoogleEarthEngineService
                 );
             }, ee.List([]));
             
-            // Filter years to reasonable range (2016-2024)
-            var filteredYears = commonYears.filter(ee.Filter.rangeContains('item', 2016, 2025));
+            // Filter years to reasonable range (1993-2025)
+            var filteredYears = commonYears.filter(ee.Filter.rangeContains('item', 1993, 2025));
             
             // Get min and max years
             var minYear = filteredYears.reduce(ee.Reducer.min());
@@ -1412,9 +1882,9 @@ class GoogleEarthEngineService
     {
         try {
             // Extract years from GEE response
-            $availableYears = $geeData['available_years'] ?? range(2016, 2024);
-            $minYear = $geeData['min_year'] ?? 2016;
-            $maxYear = $geeData['max_year'] ?? 2024;
+            $availableYears = $geeData['available_years'] ?? range(1993, date('Y'));
+            $minYear = $geeData['min_year'] ?? 1993;
+            $maxYear = $geeData['max_year'] ?? date('Y');
             $totalYears = $geeData['total_years'] ?? count($availableYears);
             
             // Ensure years are sorted
@@ -1425,19 +1895,96 @@ class GoogleEarthEngineService
                 'oldest_year' => (int) $minYear,
                 'newest_year' => (int) $maxYear,
                 'total_years' => (int) $totalYears,
-                'source' => 'gee'
+                'source' => 'gee_api'
             ];
         } catch (Exception $e) {
             Log::warning('Failed to process available years from GEE', ['error' => $e->getMessage()]);
             
             // Return fallback years
             return [
-                'available_years' => range(2016, 2024),
-                'oldest_year' => 2016,
-                'newest_year' => 2024,
+                'available_years' => range(1993, date('Y')),
+                'oldest_year' => 1993,
+                'newest_year' => date('Y'),
                 'total_years' => 9,
-                'source' => 'fallback'
+                'source' => 'fallback_range'
             ];
         }
+    }
+    
+    /**
+     * Simplify complex geometries to improve GEE performance
+     */
+    private function simplifyGeometry(array $geometry): array
+    {
+        // If it's a simple polygon with few points, return as-is
+        $coordCount = $this->countCoordinates($geometry);
+        
+        if ($coordCount <= 50) {
+            return $geometry;
+        }
+        
+        // For complex polygons, simplify by reducing coordinate density
+        if ($geometry['type'] === 'Polygon') {
+            // Single polygon: simplify to 50 points
+            $geometry['coordinates'][0] = $this->simplifyCoordinateArray($geometry['coordinates'][0], 50);
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            // MultiPolygon: simplify each polygon to fewer points
+            // For large MultiPolygons, use fewer points per polygon to avoid GEE timeout
+            $polygonCount = count($geometry['coordinates']);
+            $maxPointsPerPolygon = $polygonCount > 10 ? 20 : 30; // Fewer points for large MultiPolygons
+            
+            foreach ($geometry['coordinates'] as &$polygon) {
+                $polygon[0] = $this->simplifyCoordinateArray($polygon[0], $maxPointsPerPolygon);
+            }
+            
+            Log::info("Simplified MultiPolygon: {$polygonCount} polygons, ~{$maxPointsPerPolygon} points each");
+        }
+        
+        return $geometry;
+    }
+    
+    /**
+     * Simplify a coordinate array using Douglas-Peucker-like sampling
+     */
+    private function simplifyCoordinateArray(array $coords, int $targetCount): array
+    {
+        $count = count($coords);
+        
+        if ($count <= $targetCount) {
+            return $coords;
+        }
+        
+        // Use uniform sampling to reduce points
+        $step = (int) ceil($count / $targetCount);
+        $simplified = [];
+        
+        for ($i = 0; $i < $count; $i += $step) {
+            $simplified[] = $coords[$i];
+        }
+        
+        // Always include the last point to close the polygon
+        if (end($simplified) !== end($coords)) {
+            $simplified[] = end($coords);
+        }
+        
+        return $simplified;
+    }
+    
+    /**
+     * Count total coordinates in a geometry
+     */
+    private function countCoordinates(array $geometry): int
+    {
+        if ($geometry['type'] === 'Polygon') {
+            return isset($geometry['coordinates'][0]) ? count($geometry['coordinates'][0]) : 0;
+        } elseif ($geometry['type'] === 'MultiPolygon') {
+            $total = 0;
+            foreach ($geometry['coordinates'] as $polygon) {
+                $total += isset($polygon[0]) ? count($polygon[0]) : 0;
+            }
+            return $total;
+        }
+        
+        return 0;
     }
 }

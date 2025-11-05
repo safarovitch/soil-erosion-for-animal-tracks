@@ -8,6 +8,7 @@ use App\Models\ErosionCache;
 use App\Models\TimeSeriesData;
 use App\Models\UserQuery;
 use App\Services\GoogleEarthEngineService;
+use App\Exceptions\GoogleEarthEngineException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
@@ -27,7 +28,7 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:2016|max:2024',
+            'year' => 'required|integer|min:1993',
             'period' => 'required|string|in:annual,monthly,seasonal',
         ]);
 
@@ -63,6 +64,21 @@ class ErosionController extends Controller
                 'year' => $request->year,
                 'period' => $request->period,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Erosion computation failed', [
+                'request' => $request->all(),
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Erosion computation failed', [
                 'request' => $request->all(),
@@ -86,7 +102,7 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:2016|max:2024',
+            'year' => 'required|integer|min:1993',
             'period' => 'required|string|in:annual,monthly,seasonal',
         ]);
 
@@ -117,8 +133,8 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district',
             'area_id' => 'required|integer',
-            'start_year' => 'integer|min:2016|max:2024',
-            'end_year' => 'integer|min:2016|max:2024',
+            'start_year' => 'integer|min:1993',
+            'end_year' => 'integer|min:1993',
         ]);
 
         try {
@@ -127,8 +143,8 @@ class ErosionController extends Controller
                 return response()->json(['error' => 'Area not found'], 404);
             }
 
-            $startYear = $request->start_year ?? 2016;
-            $endYear = $request->end_year ?? 2024;
+            $startYear = $request->start_year ?? 1993;
+            $endYear = $request->end_year ?? date('Y');
 
             // Log the query
             $this->logQuery($request, $area, 'time_series', [
@@ -175,7 +191,7 @@ class ErosionController extends Controller
     {
         $request->validate([
             'geometry' => 'required|array',
-            'year' => 'required|integer|min:2016|max:2024',
+            'year' => 'required|integer|min:1993',
         ]);
 
         try {
@@ -203,6 +219,21 @@ class ErosionController extends Controller
                 'geometry' => $request->geometry,
                 'year' => $request->year,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Geometry analysis failed', [
+                'request' => $request->all(),
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Geometry analysis failed', [
                 'request' => $request->all(),
@@ -349,8 +380,8 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'start_year' => 'required|integer|min:2016|max:2024',
-            'end_year' => 'required|integer|min:2016|max:2024',
+            'start_year' => 'required|integer|min:1993',
+            'end_year' => 'required|integer|min:1993',
         ]);
 
         try {
@@ -376,8 +407,8 @@ class ErosionController extends Controller
                 ], 503);
             }
 
-            // Fetch directly from GEE
-            $data = $this->geeService->getRainfallSlope($area, $request->start_year, $request->end_year);
+            // Fetch grid data for visualization
+            $data = $this->geeService->getRainfallSlopeGrid($area, $request->start_year, $request->end_year);
 
             return response()->json([
                 'success' => true,
@@ -385,6 +416,19 @@ class ErosionController extends Controller
                 'area_type' => $request->area_type,
                 'area_id' => $request->area_id,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Rainfall slope retrieval failed', [
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Rainfall slope retrieval failed', [
                 'error' => $e->getMessage(),
@@ -405,8 +449,8 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'start_year' => 'required|integer|min:2016|max:2024',
-            'end_year' => 'required|integer|min:2016|max:2024',
+            'start_year' => 'required|integer|min:1993',
+            'end_year' => 'required|integer|min:1993',
         ]);
 
         try {
@@ -432,8 +476,8 @@ class ErosionController extends Controller
                 ], 503);
             }
 
-            // Fetch directly from GEE
-            $data = $this->geeService->getRainfallCV($area, $request->start_year, $request->end_year);
+            // Fetch grid data for visualization
+            $data = $this->geeService->getRainfallCVGrid($area, $request->start_year, $request->end_year);
 
             return response()->json([
                 'success' => true,
@@ -441,6 +485,19 @@ class ErosionController extends Controller
                 'area_type' => $request->area_type,
                 'area_id' => $request->area_id,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Rainfall CV retrieval failed', [
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Rainfall CV retrieval failed', [
                 'error' => $e->getMessage(),
@@ -461,14 +518,39 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:2016|max:2024',
-            'grid_size' => 'integer|min:5|max:50',
+            'year' => 'required|integer|min:1993',
+            'grid_size' => 'integer|min:10|max:500',
         ]);
 
         try {
             $area = $this->getArea($request->area_type, $request->area_id);
             if (!$area) {
                 return response()->json(['error' => 'Area not found'], 404);
+            }
+
+            // Check if precomputed tiles exist first
+            $map = \App\Models\PrecomputedErosionMap::where([
+                'area_type' => $request->area_type,
+                'area_id' => $request->area_id,
+                'year' => $request->year
+            ])->first();
+
+            if ($map && $map->isAvailable()) {
+                // Return tiles URL for tile layer rendering
+                Log::info('Using precomputed tiles for erosion layer', [
+                    'area' => $area->name_en,
+                    'year' => $request->year,
+                    'tiles_url' => $map->tile_url
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'tiles' => $map->tile_url,
+                        'statistics' => $map->statistics,
+                        'metadata' => $map->metadata
+                    ],
+                ]);
             }
 
             // Check if GEE is configured
@@ -479,15 +561,34 @@ class ErosionController extends Controller
                 ], 503);
             }
 
-            $gridSize = $request->grid_size ?? 10;
+            $gridSize = $request->grid_size ?? 50;
 
-            // Fetch directly from GEE
+            // Fetch directly from GEE if tiles don't exist
+            Log::info('Computing erosion grid from GEE (no tiles available)', [
+                'area' => $area->name_en,
+                'year' => $request->year
+            ]);
+
             $gridData = $this->geeService->getDetailedErosionGrid($area, $request->year, $gridSize);
 
             return response()->json([
                 'success' => true,
                 'data' => $gridData,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Detailed grid retrieval failed', [
+                'area' => $request->area_id,
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Detailed grid retrieval failed', [
                 'area' => $request->area_id,
@@ -544,6 +645,20 @@ class ErosionController extends Controller
                     'name' => $area->name_en,
                 ],
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('Available years error', [
+                'area' => $area->name_en ?? 'unknown',
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error('Available years error', [
                 'area' => $area->name_en ?? 'unknown',
@@ -668,7 +783,7 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:2016|max:2024',
+            'year' => 'required|integer|min:1993',
         ]);
 
         try {
@@ -714,6 +829,19 @@ class ErosionController extends Controller
                 'success' => true,
                 'data' => $data,
             ]);
+        } catch (GoogleEarthEngineException $e) {
+            Log::error("Layer {$factor} retrieval failed", [
+                'error' => $e->getMessage(),
+                'context' => $e->getContext(),
+                'http_status' => $e->getHttpStatus(),
+            ]);
+            $statusCode = $e->getHttpStatus() ?? 500;
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'details' => $e->getContext(),
+                'error_code' => $e->getGeeErrorCode(),
+            ], $statusCode);
         } catch (\Exception $e) {
             Log::error("Layer {$factor} retrieval failed", [
                 'error' => $e->getMessage(),

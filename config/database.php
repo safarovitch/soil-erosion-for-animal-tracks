@@ -96,6 +96,16 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
+            'options' => extension_loaded('pdo_pgsql') ? array_filter([
+                PDO::ATTR_PERSISTENT => false, // Disable persistent connections to prevent leaks
+                PDO::ATTR_TIMEOUT => 5,
+                PDO::ATTR_EMULATE_PREPARES => false,
+                PDO::ATTR_STRINGIFY_FETCHES => false,
+                // Force connection to close when not in use
+                PDO::ATTR_AUTOCOMMIT => true,
+            ]) : [],
+            // Connection pool settings to prevent too many connections
+            'sticky' => false, // Don't reuse connections across requests
         ],
 
         'sqlsrv' => [

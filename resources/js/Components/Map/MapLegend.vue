@@ -13,14 +13,14 @@
 
       <!-- Rainfall Slope Legend (Diverging) -->
       <div v-else-if="layer.id === 'rainfall_slope'" class="space-y-1">
-        <div class="text-xs mb-1">% change per year</div>
+        <div class="text-xs mb-1">mm/year per year</div>
         <div class="flex items-center">
-          <div class="flex-1 h-4 rounded" style="background: linear-gradient(to right, #dc2626, #ffffff, #16a34a)"></div>
+          <div class="flex-1 h-4 rounded" style="background: linear-gradient(to right, #FF0000, #FFA500, #FFFF00, #90EE90, #008000)"></div>
         </div>
         <div class="flex justify-between text-xs mt-1">
-          <span>-10% (Decreasing)</span>
-          <span>0%</span>
-          <span>+10% (Increasing)</span>
+          <span>Decreasing</span>
+          <span>Neutral</span>
+          <span>Increasing</span>
         </div>
       </div>
 
@@ -79,13 +79,13 @@ const activeLayers = computed(() => {
     .filter(Boolean)
 })
 
-// Erosion legend data
+// Erosion legend data - Full opacity for better visibility
 const erosionLegend = [
-  { label: 'Very Low', range: '0-5 t/ha/yr', color: 'rgba(34, 139, 34, 0.7)' },
-  { label: 'Low', range: '5-15 t/ha/yr', color: 'rgba(255, 215, 0, 0.7)' },
-  { label: 'Moderate', range: '15-30 t/ha/yr', color: 'rgba(255, 140, 0, 0.7)' },
-  { label: 'Severe', range: '30-50 t/ha/yr', color: 'rgba(220, 20, 60, 0.7)' },
-  { label: 'Excessive', range: '>50 t/ha/yr', color: 'rgba(139, 0, 0, 0.8)' },
+  { label: 'Very Low', range: '0-5 t/ha/yr', color: 'rgba(34, 139, 34, 1.0)' },
+  { label: 'Low', range: '5-15 t/ha/yr', color: 'rgba(255, 215, 0, 1.0)' },
+  { label: 'Moderate', range: '15-30 t/ha/yr', color: 'rgba(255, 140, 0, 1.0)' },
+  { label: 'Severe', range: '30-50 t/ha/yr', color: 'rgba(220, 20, 60, 1.0)' },
+  { label: 'Excessive', range: '>50 t/ha/yr', color: 'rgba(139, 0, 0, 1.0)' },
 ]
 
 // Get unit for RUSLE factors

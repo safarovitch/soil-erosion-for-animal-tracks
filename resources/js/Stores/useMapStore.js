@@ -11,7 +11,7 @@ export const useMapStore = defineStore('map', () => {
     const selectedRegion = ref(null)
     const selectedDistrict = ref(null)
     const selectedYear = ref(new Date().getFullYear())
-    const visibleLayers = ref(['base', 'erosion'])
+    const visibleLayers = ref([])
     const drawingMode = ref(null)
     const mapInstance = ref(null)
     const statistics = ref(null)
@@ -70,7 +70,7 @@ export const useMapStore = defineStore('map', () => {
 
     const resetMap = () => {
         clearSelection()
-        visibleLayers.value = ['base', 'erosion']
+        visibleLayers.value = []
         selectedYear.value = new Date().getFullYear()
     }
 

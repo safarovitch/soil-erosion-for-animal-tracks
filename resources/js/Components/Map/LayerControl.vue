@@ -26,18 +26,19 @@
       <div
         v-for="layer in availableLayers"
         :key="layer.id"
-        class="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+        class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
       >
-        <div class="flex items-center space-x-3">
+        <div class="flex items-center space-x-3 flex-1">
           <input
             type="checkbox"
             :id="`layer-${layer.id}`"
+            :value="layer.id"
             :checked="visibleLayers && visibleLayers.includes(layer.id)"
             @change="toggleLayer(layer.id, $event.target.checked)"
             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
           />
-          <div>
-            <label :for="`layer-${layer.id}`" class="text-sm font-medium text-gray-900 cursor-pointer">
+          <div class="flex-1">
+            <label :for="`layer-${layer.id}`" class="text-sm font-medium text-gray-900 cursor-pointer block">
               {{ layer.name }}
             </label>
             <p class="text-xs text-gray-500">{{ layer.description }}</p>
@@ -54,38 +55,6 @@
           >
             ℹ️
           </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Layer Order -->
-    <div v-if="visibleLayers && visibleLayers.length > 1" class="border-t pt-4">
-      <h4 class="text-sm font-medium text-gray-900 mb-2">Layer Order</h4>
-      <div class="space-y-2">
-        <div
-          v-for="(layerId, index) in visibleLayers"
-          :key="layerId"
-          class="flex items-center justify-between p-2 bg-white border rounded"
-        >
-          <span class="text-sm">{{ getLayerName(layerId) }}</span>
-          <div class="flex space-x-1">
-            <button
-              @click="moveLayerUp(index)"
-              :disabled="index === 0"
-              class="text-gray-400 hover:text-gray-600 disabled:opacity-50"
-              title="Move Up"
-            >
-              ↑
-            </button>
-            <button
-              @click="moveLayerDown(index)"
-              :disabled="index === visibleLayers.length - 1"
-              class="text-gray-400 hover:text-gray-600 disabled:opacity-50"
-              title="Move Down"
-            >
-              ↓
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -195,38 +164,15 @@ const toggleLabels = (visible) => {
   emit('labels-toggle', visible)
 }
 
-const getLayerName = (layerId) => {
-  const layer = props.availableLayers.find(l => l.id === layerId)
-  return layer ? layer.name : layerId
-}
-
-const moveLayerUp = (index) => {
-  if (index > 0) {
-    const newOrder = [...props.visibleLayers]
-    const temp = newOrder[index]
-    newOrder[index] = newOrder[index - 1]
-    newOrder[index - 1] = temp
-    emit('layer-order-change', newOrder)
-  }
-}
-
-const moveLayerDown = (index) => {
-  if (index < props.visibleLayers.length - 1) {
-    const newOrder = [...props.visibleLayers]
-    const temp = newOrder[index]
-    newOrder[index] = newOrder[index + 1]
-    newOrder[index + 1] = temp
-    emit('layer-order-change', newOrder)
-  }
-}
-
 const showAllLayers = () => {
-  const allLayerIds = props.availableLayers.map(layer => layer.id)
-  allLayerIds.forEach(layerId => {
-    if (!props.visibleLayers || !props.visibleLayers.includes(layerId)) {
-      emit('layer-toggle', layerId, true)
-    }
-  })
+  // Enable all available layers for comparison
+  if (props.availableLayers && props.availableLayers.length > 0) {
+    props.availableLayers.forEach(layer => {
+      if (!props.visibleLayers || !props.visibleLayers.includes(layer.id)) {
+        emit('layer-toggle', layer.id, true)
+      }
+    })
+  }
 }
 
 const hideAllLayers = () => {

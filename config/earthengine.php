@@ -39,8 +39,8 @@ return [
     */
 
     'defaults' => [
-        'start_year' => 2016,
-        'end_year' => 2024,
+        'start_year' => 1993,
+        'end_year' => date('Y'),
         'resolution' => 1000, // meters
         'tile_size' => 1000, // pixels
     ],

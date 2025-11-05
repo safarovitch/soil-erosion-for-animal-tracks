@@ -60,7 +60,7 @@ class TimeSeriesData extends Model
     /**
      * Get time series data for an area.
      */
-    public static function getTimeSeriesForArea(string $areaType, int $areaId, int $startYear = 2016, int $endYear = 2024): \Illuminate\Database\Eloquent\Collection
+    public static function getTimeSeriesForArea(string $areaType, int $areaId, int $startYear = 1993, int $endYear = 2024): \Illuminate\Database\Eloquent\Collection
     {
         return static::where('area_type', $areaType)
             ->where('area_id', $areaId)

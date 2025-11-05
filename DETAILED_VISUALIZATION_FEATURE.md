@@ -395,7 +395,7 @@ public function getDetailedGrid(Request $request): JsonResponse
     $request->validate([
         'area_type' => 'required|in:region,district',
         'area_id' => 'required|integer',
-        'year' => 'required|integer|min:2016|max:2024',
+        'year' => 'required|integer|min:1993',
         'grid_size' => 'integer|min:5|max:50',
     ]);
 

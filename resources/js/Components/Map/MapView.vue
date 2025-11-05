@@ -1,13 +1,18 @@
 <template>
-  <div ref="mapContainer" class="w-full h-full min-h-96" style="min-height: 400px;"></div>
+  <div ref="mapContainer" class="w-full h-full min-h-96 relative" style="min-height: 400px;">
+    <!-- Zoom Level Indicator -->
+    <div class="absolute top-16 left-4 bg-white bg-opacity-90 px-3 py-1.5 rounded shadow-md text-sm font-semibold text-gray-700 z-10 border border-gray-300">
+      <span class="text-gray-600">Zoom:</span> <span class="text-blue-600">{{ currentZoom.toFixed(2) }}</span>
+    </div>
+  </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import axios from 'axios'
 import { Map, View } from 'ol'
-import { Tile as TileLayer, Vector as VectorLayer } from 'ol/layer'
-import { OSM, Vector as VectorSource, XYZ } from 'ol/source'
+import { Tile as TileLayer, Vector as VectorLayer, Image as ImageLayer } from 'ol/layer'
+import { OSM, Vector as VectorSource, XYZ, ImageCanvas as ImageCanvasSource } from 'ol/source'
 import { Style, Fill, Stroke } from 'ol/style'
 import { GeoJSON, TopoJSON } from 'ol/format'
 import { fromLonLat } from 'ol/proj'
@@ -16,6 +21,7 @@ import { createBox } from 'ol/interaction/Draw'
 import { Feature } from 'ol'
 import { easeOut, inAndOut } from 'ol/easing'
 import { Polygon, Point, LineString } from 'ol/geom'
+import { ScaleLine, defaults as defaultControls } from 'ol/control'
 import 'ol/ol.css'
 
 // Props
@@ -30,7 +36,7 @@ const props = defineProps({
 })
 
 // Emits
-const emit = defineEmits(['map-ready', 'statistics-updated', 'district-clicked', 'region-clicked', 'geojson-loaded', 'detailed-erosion-loaded'])
+const emit = defineEmits(['map-ready', 'statistics-updated', 'district-clicked', 'region-clicked', 'geojson-loaded', 'detailed-erosion-loaded', 'area-toggle-selection', 'area-replace-selection', 'boundary-violation', 'layer-warning'])
 
 // Reactive data
 const mapContainer = ref(null)
@@ -48,13 +54,17 @@ const detailedErosionLayer = ref(null) // Detailed erosion visualization layer f
 const animatedLayers = ref(new Set()) // Track layers with animated borders
 const baseLayer = ref(null) // Reference to base layer
 const labelsLayer = ref(null) // Reference to labels layer
+const tajikistanBoundaryLayer = ref(null) // Boundary layer for Tajikistan
+const tajikistanBoundary = ref(null) // Tajikistan boundary geometry
+const currentZoom = ref(8) // Current zoom level for display
+const scaleLine = ref(null) // Scale line control
 
 // Map configuration
 const mapConfig = {
   center: fromLonLat([71.5, 38.5]), // Tajikistan center
-  zoom: 7,
+  zoom: 8,  // Start at zoom 8 to show precomputed tiles
   maxZoom: 18,
-  minZoom: 5,
+  minZoom: 6,  // Allow zoom out to 6, but tiles only available from 8+
 }
 
 // Initialize map
@@ -97,6 +107,15 @@ const initMap = () => {
     }),
   })
 
+  // Create scale line control (measurement ruler)
+  scaleLine.value = new ScaleLine({
+    units: 'metric', // Use metric units (km, m)
+    className: 'ol-scale-line',
+    bar: true, // Show bar style
+    text: true, // Show text
+    minWidth: 140, // Minimum width in pixels
+  })
+
   // Create the map
   map.value = new Map({
     target: mapContainer.value,
@@ -111,11 +130,29 @@ const initMap = () => {
       maxZoom: mapConfig.maxZoom,
       minZoom: mapConfig.minZoom,
     }),
+    controls: defaultControls().extend([
+      scaleLine.value, // Add scale line control
+    ]),
   })
 
   // Store references for later use
   baseLayer.value = baseLayerInstance
   labelsLayer.value = labelsLayerInstance
+
+  // Initialize zoom level
+  currentZoom.value = mapConfig.zoom
+
+  // Update zoom level indicator when zoom changes
+  map.value.getView().on('change:resolution', () => {
+    const view = map.value.getView()
+    currentZoom.value = view.getZoom()
+  })
+
+  // Also update on moveend (catches all zoom changes)
+  map.value.on('moveend', () => {
+    const view = map.value.getView()
+    currentZoom.value = view.getZoom()
+  })
 
   // Emit map ready event
   emit('map-ready', map.value)
@@ -152,7 +189,7 @@ const initMap = () => {
 }
 
 // Get erosion risk color based on value
-const getErosionColor = (erosionRate, opacity = 0.6) => {
+const getErosionColor = (erosionRate, opacity = 1.0) => {
   // RUSLE Erosion Risk Classification (Updated):
   // Very Low: 0-5 t/ha/yr - Green
   // Low: 5-15 t/ha/yr - Yellow
@@ -173,8 +210,46 @@ const getErosionColor = (erosionRate, opacity = 0.6) => {
   } else if (erosionRate < 50) {
     return `rgba(220, 20, 60, ${opacity})` // Red - Severe
   } else {
-    return `rgba(139, 0, 0, 0.8)` // Dark Red - Excessive
+    return `rgba(139, 0, 0, ${opacity})` // Dark Red - Excessive
   }
+}
+
+// Get erosion color as RGB object for canvas rendering with smooth gradients
+const getErosionColorRGB = (erosionRate) => {
+  // Smooth gradient color interpolation
+  const thresholds = [
+    { value: 0, color: { r: 34, g: 139, b: 34 } },   // Green
+    { value: 5, color: { r: 144, g: 238, b: 144 } }, // Light Green
+    { value: 15, color: { r: 255, g: 215, b: 0 } },  // Yellow
+    { value: 30, color: { r: 255, g: 140, b: 0 } },  // Orange
+    { value: 50, color: { r: 220, g: 20, b: 60 } },  // Red
+    { value: 100, color: { r: 139, g: 0, b: 0 } },   // Dark Red
+    { value: 200, color: { r: 80, g: 0, b: 0 } }     // Very Dark Red
+  ]
+  
+  if (!erosionRate || erosionRate < 0) {
+    return { r: 200, g: 200, b: 200, a: 0 } // Transparent for no data
+  }
+  
+  // Find surrounding thresholds for interpolation
+  let lower = thresholds[0]
+  let upper = thresholds[thresholds.length - 1]
+  
+  for (let i = 0; i < thresholds.length - 1; i++) {
+    if (erosionRate >= thresholds[i].value && erosionRate <= thresholds[i + 1].value) {
+      lower = thresholds[i]
+      upper = thresholds[i + 1]
+      break
+    }
+  }
+  
+  // Linear interpolation between colors
+  const t = (erosionRate - lower.value) / (upper.value - lower.value)
+  const r = Math.round(lower.color.r + (upper.color.r - lower.color.r) * t)
+  const g = Math.round(lower.color.g + (upper.color.g - lower.color.g) * t)
+  const b = Math.round(lower.color.b + (upper.color.b - lower.color.b) * t)
+  
+  return { r, g, b, a: 178 } // 0.7 opacity = 178/255
 }
 
 // Smooth border animation functions
@@ -444,9 +519,7 @@ const loadDistrictsLayer = () => {
       const isSelected = props.selectedDistrict && feature.get('id') === props.selectedDistrict.id
       
       return new Style({
-        fill: new Fill({
-          color: getErosionColor(erosionRate, isSelected ? 0.8 : 0.4),
-        }),
+        // No fill - only borders
         stroke: new Stroke({
           color: isSelected ? '#000000' : '#666666',
           width: isSelected ? 3 : 1,
@@ -457,7 +530,7 @@ const loadDistrictsLayer = () => {
     districtsBaseLayer.value = new VectorLayer({
       source,
       style: styleFunction,
-      zIndex: 10,
+      zIndex: 15, // Above data layers (8) but below selection layers (20)
     })
     
     map.value.addLayer(districtsBaseLayer.value)
@@ -566,6 +639,15 @@ const handleAreaClick = (event) => {
   if (features.length > 0) {
     const feature = features[0]
     const properties = feature.getProperties()
+    const isShiftClick = event.originalEvent.shiftKey
+    
+    // Check if clicking outside Tajikistan boundary
+    const geometry = feature.getGeometry()
+    if (geometry && !isFeatureWithinBoundary(geometry)) {
+      console.log('Click is outside Tajikistan boundary')
+      emit('boundary-violation')
+      return
+    }
     
     // Check if this is a district or region feature
     if (properties.district_id || properties.region_id) {
@@ -578,8 +660,13 @@ const handleAreaClick = (event) => {
         geometry: properties.geometry
       }
       
-      console.log('District clicked for selection:', district)
-      emit('district-clicked', district)
+      console.log('District clicked for selection:', district, 'Shift:', isShiftClick)
+      
+      if (isShiftClick) {
+        emit('area-toggle-selection', district)
+      } else {
+        emit('district-clicked', district)
+      }
     } else if (properties.region_id === undefined && properties.district_id === undefined && properties.id) {
       // This might be a region
       const region = {
@@ -589,8 +676,13 @@ const handleAreaClick = (event) => {
         geometry: properties.geometry
       }
       
-      console.log('Region clicked for selection:', region)
-      emit('region-clicked', region)
+      console.log('Region clicked for selection:', region, 'Shift:', isShiftClick)
+      
+      if (isShiftClick) {
+        emit('area-toggle-selection', region)
+      } else {
+        emit('region-clicked', region)
+      }
     }
   }
 }
@@ -611,7 +703,18 @@ const updateRegionLayer = (region) => {
     }
 
     const geojsonFormat = new GeoJSON()
-    const features = geojsonFormat.readFeatures(geometryData, {
+    
+    // Wrap geometry in a Feature for OpenLayers
+    const featureData = {
+      type: 'Feature',
+      geometry: geometryData,
+      properties: {
+        id: region.id,
+        name: region.name_en || region.name
+      }
+    }
+    
+    const features = geojsonFormat.readFeatures(featureData, {
       dataProjection: 'EPSG:4326',
       featureProjection: 'EPSG:3857',
     })
@@ -623,15 +726,13 @@ const updateRegionLayer = (region) => {
     regionLayer.value = new VectorLayer({
       source,
       style: new Style({
-        fill: new Fill({
-          color: 'rgba(0, 0, 255, 0.1)',
-        }),
+        // No fill - only blue border for selected region
         stroke: new Stroke({
           color: '#0000ff',
           width: 3,
         }),
       }),
-      zIndex: 20, // Above base layers but below detailed erosion
+      zIndex: 20, // Above all data and base layers
     })
 
     map.value.addLayer(regionLayer.value)
@@ -672,7 +773,18 @@ const updateDistrictLayer = (district) => {
     }
 
     const geojsonFormat = new GeoJSON()
-    const features = geojsonFormat.readFeatures(geometryData, {
+    
+    // Wrap geometry in a Feature for OpenLayers
+    const featureData = {
+      type: 'Feature',
+      geometry: geometryData,
+      properties: {
+        id: district.id,
+        name: district.name_en || district.name
+      }
+    }
+    
+    const features = geojsonFormat.readFeatures(featureData, {
       dataProjection: 'EPSG:4326',
       featureProjection: 'EPSG:3857',
     })
@@ -684,15 +796,13 @@ const updateDistrictLayer = (district) => {
     districtLayer.value = new VectorLayer({
       source,
       style: new Style({
-        fill: new Fill({
-          color: 'rgba(0, 255, 0, 0.1)',
-        }),
+        // No fill - only green border for selected district
         stroke: new Stroke({
           color: '#00ff00',
           width: 3,
         }),
       }),
-      zIndex: 20, // Above base layers but below detailed erosion
+      zIndex: 20, // Above all data and base layers
     })
 
     map.value.addLayer(districtLayer.value)
@@ -726,13 +836,13 @@ const updateErosionData = (data) => {
     // Add raster layer for erosion data
     const erosionLayer = new TileLayer({
       source: new XYZ({
-        url: data.tiles,
-        crossOrigin: 'anonymous',
-      }),
-      opacity: 0.7,
-    })
+      url: data.tiles,
+      crossOrigin: 'anonymous',
+    }),
+    opacity: 1.0,
+  })
 
-    map.value.addLayer(erosionLayer)
+  map.value.addLayer(erosionLayer)
   }
 }
 
@@ -760,11 +870,12 @@ const loadDetailedErosionData = async (area) => {
     }
     
     // Fetch real data from backend
+    // Use grid_size: 10 for fast response (<15s even for large regions)
     const response = await axios.post('/api/erosion/detailed-grid', {
       area_type: areaType,
       area_id: areaId,
       year: props.selectedYear || 2024,
-      grid_size: 10,
+      grid_size: 10, // 10x10 = 100 cells (fast)
     })
 
     if (!response.data.success) {
@@ -776,14 +887,38 @@ const loadDetailedErosionData = async (area) => {
     }
 
     const gridData = response.data.data
-    console.log('Received grid data from backend:', gridData.cells?.length, 'cells')
+    console.log('Received grid data from backend:', gridData)
+
+    // Check if backend returned precomputed tiles
+    if (gridData.tiles) {
+      console.log('Using precomputed tiles:', gridData.tiles)
+      
+      detailedErosionLayer.value = new TileLayer({
+        source: new XYZ({
+          url: gridData.tiles,
+          crossOrigin: 'anonymous',
+          minZoom: 8,  // Tiles are only available for zoom 8-12
+          maxZoom: 12
+        }),
+        opacity: 1.0,
+        zIndex: 8, // Below district borders (15) and selection layers (20)
+        minZoom: 8,  // Don't show layer below zoom 8
+        maxZoom: 18  // Allow upscaling beyond zoom 12
+      })
+      
+      map.value.addLayer(detailedErosionLayer.value)
+      console.log('✓ Added precomputed tile layer (zoom 8-12)')
+      return
+    }
+
+    // Otherwise, render grid cells as vector layer
+    console.log('Using grid cells:', gridData.cells?.length, 'cells')
 
     const geojsonFormat = new GeoJSON()
     
-    // Convert backend grid cells to OpenLayers features
-    // Backend already ensures cells match the exact area shape
+    // FALLBACK: Draw polygons with smooth colors (works immediately)
+    // Create features from grid cells
     const detailedFeatures = gridData.cells.map(cell => {
-      // Read cell geometry from backend (already clipped to area boundary)
       const cellGeometry = geojsonFormat.readGeometry(cell.geometry, {
         dataProjection: 'EPSG:4326',
         featureProjection: 'EPSG:3857',
@@ -800,7 +935,7 @@ const loadDetailedErosionData = async (area) => {
       features: detailedFeatures,
     })
 
-    // Style function for detailed erosion visualization
+    // Style function with smooth color gradients
     const detailedStyleFunction = (feature) => {
       const erosionRate = feature.get('erosionRate')
       return new Style({
@@ -808,7 +943,7 @@ const loadDetailedErosionData = async (area) => {
           color: getErosionColor(erosionRate, 0.7),
         }),
         stroke: new Stroke({
-          color: getErosionColor(erosionRate, 0.9),
+          color: getErosionColor(erosionRate, 0.3),
           width: 0.5,
         }),
       })
@@ -817,18 +952,201 @@ const loadDetailedErosionData = async (area) => {
     detailedErosionLayer.value = new VectorLayer({
       source: detailedSource,
       style: detailedStyleFunction,
-      zIndex: 15, // Above district outline but below interactions
+      zIndex: 8, // Below district borders (15) and selection layers (20)
     })
+    
+    console.log('✓ Created vector layer with', detailedFeatures.length, 'cells')
+    
+    // TODO: Canvas heatmap implementation (commented out for now)
+    /*
+    // Create smooth gradient heatmap using Canvas interpolation
+    const bbox = gridData.bbox // [minLon, minLat, maxLon, maxLat] in EPSG:4326
+    const gridSize = gridData.grid_size
+    
+    // Transform bbox to EPSG:3857 for rendering
+    const bboxMin = fromLonLat([bbox[0], bbox[1]])
+    const bboxMax = fromLonLat([bbox[2], bbox[3]])
+    const bbox3857 = [bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1]]
+    
+    // Build erosion value grid
+    const erosionGrid = Array(gridSize).fill(null).map(() => Array(gridSize).fill(null))
+    gridData.cells.forEach(cell => {
+      if (cell.x < gridSize && cell.y < gridSize) {
+        erosionGrid[cell.y][cell.x] = cell.erosion_rate
+      }
+    })
+    
+    // Create canvas-based heatmap with smooth interpolation
+    const createHeatmapCanvas = (extent, resolution) => {
+      try {
+        const canvas = document.createElement('canvas')
+        const canvasWidth = Math.ceil((extent[2] - extent[0]) / resolution[0])
+        const canvasHeight = Math.ceil((extent[3] - extent[1]) / resolution[1])
+        
+        // Clamp canvas size to reasonable limits
+        canvas.width = Math.min(canvasWidth, 4096)
+        canvas.height = Math.min(canvasHeight, 4096)
+        
+        const ctx = canvas.getContext('2d')
+        const imageData = ctx.createImageData(canvas.width, canvas.height)
+        
+        console.log(`Rendering heatmap canvas: ${canvas.width}x${canvas.height}px`)
+      
+        // Bilinear interpolation for smooth gradients
+        for (let py = 0; py < canvas.height; py++) {
+          for (let px = 0; px < canvas.width; px++) {
+            // Convert pixel to map coordinates (EPSG:3857)
+            const x = extent[0] + (px * resolution[0])
+            const y = extent[3] - (py * resolution[1]) // Y is inverted
+          
+            // Convert to grid coordinates using transformed bbox
+            const gx = ((x - bbox3857[0]) / (bbox3857[2] - bbox3857[0])) * gridSize
+            const gy = ((bbox3857[3] - y) / (bbox3857[3] - bbox3857[1])) * gridSize
+            
+            // Bilinear interpolation
+            const x0 = Math.floor(gx)
+            const x1 = Math.min(x0 + 1, gridSize - 1)
+            const y0 = Math.floor(gy)
+            const y1 = Math.min(y0 + 1, gridSize - 1)
+            
+            const fx = gx - x0
+            const fy = gy - y0
+            
+            // Get corner values
+            const v00 = erosionGrid[y0]?.[x0] ?? null
+            const v10 = erosionGrid[y0]?.[x1] ?? null
+            const v01 = erosionGrid[y1]?.[x0] ?? null
+            const v11 = erosionGrid[y1]?.[x1] ?? null
+            
+            // Skip if no data
+            if (v00 === null && v10 === null && v01 === null && v11 === null) {
+              continue
+            }
+            
+            // Interpolate with available values
+            const values = [v00, v10, v01, v11].filter(v => v !== null)
+            const weights = [
+              v00 !== null ? (1-fx)*(1-fy) : 0,
+              v10 !== null ? fx*(1-fy) : 0,
+              v01 !== null ? (1-fx)*fy : 0,
+              v11 !== null ? fx*fy : 0
+            ]
+            
+            const totalWeight = weights.reduce((a, b) => a + b, 0)
+            const interpolatedValue = totalWeight > 0 
+              ? [v00, v10, v01, v11].reduce((sum, val, i) => sum + (val || 0) * weights[i], 0) / totalWeight
+              : null
+            
+            if (interpolatedValue !== null) {
+              // Get smooth color for interpolated value
+              const color = getErosionColorRGB(interpolatedValue)
+              const idx = (py * canvas.width + px) * 4
+              imageData.data[idx] = color.r
+              imageData.data[idx + 1] = color.g
+              imageData.data[idx + 2] = color.b
+              imageData.data[idx + 3] = color.a
+            }
+          }
+        }
+        
+        ctx.putImageData(imageData, 0, 0)
+        console.log('✓ Heatmap canvas rendered successfully')
+        return canvas
+        
+      } catch (error) {
+        console.error('Error creating heatmap canvas:', error)
+        // Return empty canvas on error
+        const canvas = document.createElement('canvas')
+        canvas.width = 1
+        canvas.height = 1
+        return canvas
+      }
+    }
+    
+    // Canvas implementation will be added later
+    // END CANVAS CODE */
+
+    // Add region boundary clipping if available
+    if (gridData.region_boundary) {
+      const boundaryGeometry = geojsonFormat.readGeometry(gridData.region_boundary, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857',
+      })
+      
+      // Use the render function to clip the layer to the region boundary
+      detailedErosionLayer.value.on('prerender', (event) => {
+        const ctx = event.context
+        const pixelRatio = event.frameState.pixelRatio
+        ctx.save()
+        
+        // Create clipping path from region boundary
+        const vectorContext = event.vectorContext
+        const coordinates = boundaryGeometry.getCoordinates()
+        
+        ctx.beginPath()
+        if (boundaryGeometry.getType() === 'Polygon') {
+          // Single polygon
+          coordinates[0].forEach((coord, i) => {
+            const pixel = map.value.getPixelFromCoordinate(coord)
+            if (i === 0) {
+              ctx.moveTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
+            } else {
+              ctx.lineTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
+            }
+          })
+        } else if (boundaryGeometry.getType() === 'MultiPolygon') {
+          // Multiple polygons
+          coordinates.forEach(polygon => {
+            polygon[0].forEach((coord, i) => {
+              const pixel = map.value.getPixelFromCoordinate(coord)
+              if (i === 0) {
+                ctx.moveTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
+              } else {
+                ctx.lineTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
+              }
+            })
+            ctx.closePath()
+          })
+        }
+        ctx.clip()
+      })
+      
+      detailedErosionLayer.value.on('postrender', (event) => {
+        const ctx = event.context
+        ctx.restore()
+      })
+      
+      // Also add a boundary outline layer
+      const boundaryFeature = new Feature({
+        geometry: boundaryGeometry,
+      })
+      
+      const boundaryLayer = new VectorLayer({
+        source: new VectorSource({
+          features: [boundaryFeature],
+        }),
+        style: new Style({
+          stroke: new Stroke({
+            color: '#2563eb',
+            width: 2,
+          }),
+        }),
+        zIndex: 16, // Above erosion layer
+      })
+      
+      map.value.addLayer(boundaryLayer)
+      console.log('Added region boundary clipping and outline')
+    }
 
     map.value.addLayer(detailedErosionLayer.value)
 
-    console.log('Detailed erosion layer added with', detailedFeatures.length, 'cells')
+    console.log('✓ Smooth gradient heatmap layer added with', gridData.cells.length, 'data cells')
 
     // Emit event to notify that detailed data is loaded
     emit('detailed-erosion-loaded', {
       areaId: area.id,
       areaName: area.name_en || area.name,
-      cellCount: detailedFeatures.length,
+      cellCount: gridData.cells.length,
       statistics: gridData.statistics,
     })
 
@@ -918,67 +1236,67 @@ const updateMapLayers = async () => {
       name: 'Soil Erosion Hazard',
       type: 'rusle',
       apiEndpoint: null, // Uses detailed grid
-      defaultOpacity: 0.7
+      defaultOpacity: 1.0
     },
     rainfall_slope: {
       name: 'Rainfall Trend',
       type: 'diverging',
       apiEndpoint: '/api/erosion/layers/rainfall-slope',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     rainfall_cv: {
       name: 'Rainfall CV',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/rainfall-cv',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     r_factor: {
       name: 'R-Factor',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/r-factor',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     k_factor: {
       name: 'K-Factor',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/k-factor',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     ls_factor: {
       name: 'LS-Factor',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/ls-factor',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     c_factor: {
       name: 'C-Factor',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/c-factor',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     p_factor: {
       name: 'P-Factor',
       type: 'sequential',
       apiEndpoint: '/api/erosion/layers/p-factor',
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     bare_soil: {
       name: 'Bare Soil Frequency',
       type: 'sequential',
       apiEndpoint: null,
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     sustainability: {
       name: 'Sustainability Factor',
       type: 'sequential',
       apiEndpoint: null,
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     },
     custom: {
       name: 'Custom Datasets',
       type: 'custom',
       apiEndpoint: null,
-      defaultOpacity: 0.6
+      defaultOpacity: 1.0
     }
   }
 
@@ -1018,20 +1336,36 @@ const updateMapLayers = async () => {
 
       // Handle erosion layer specially
       if (layerId === 'erosion') {
-        console.log('Handling erosion layer for country-wide display')
+        console.log('Handling erosion layer for display')
         
-        // For country-wide erosion, use the multiple areas approach to paint all districts
-        if (!selectedArea && selectedAreas.length === 0) {
-          // No area selected - load erosion data for all districts individually
-          console.log('No area selected, loading erosion data for all districts')
-          await loadDetailedErosionData({ id: 0, name_en: 'Tajikistan', area_type: 'country' })
-        } else if (selectedAreas.length > 0) {
+        // Check for country-level selection
+        const isCountrySelection = selectedArea && selectedArea.area_type === 'country'
+        const hasMultipleAreas = selectedAreas.length > 0
+        
+        // For country-wide erosion, skip detailed grid (not supported by backend)
+        if (isCountrySelection || (!selectedArea && !hasMultipleAreas)) {
+          console.log('Country-level or no area selected - skipping detailed erosion grid')
+          emit('layer-warning', {
+            type: 'info',
+            title: 'Area Selection Required',
+            message: 'Please select a region or district to visualize erosion data.',
+            details: 'Country-wide detailed erosion visualization is not available. Select a specific area from the dropdown.'
+          })
+          return // Don't load detailed grid for country-level
+        }
+        
+        if (hasMultipleAreas) {
           // Multiple areas selected - load erosion data for each area
           console.log(`${selectedAreas.length} areas selected, loading erosion data for each`)
           for (const area of selectedAreas) {
+            // Skip country-level areas in the list
+            if (area.area_type === 'country') {
+              console.log('Skipping country-level area in multiple selection')
+              continue
+            }
             await loadDetailedErosionData(area)
           }
-        } else {
+        } else if (selectedArea) {
           // Single area selected - load detailed erosion data for that area
           await loadDetailedErosionData(selectedArea)
         }
@@ -1213,10 +1547,14 @@ const fetchAndRenderLayer = async (layerId, layerDef, area, areaType, opacity) =
       const layer = new TileLayer({
         source: new XYZ({
           url: layerData.tiles,
-          crossOrigin: 'anonymous'
+          crossOrigin: 'anonymous',
+          minZoom: 8,  // Precomputed tiles are for zoom 8-12
+          maxZoom: 12
         }),
         opacity: opacity,
-        zIndex: 12,
+        zIndex: 8, // Below district borders (15) and selection layers (20)
+        minZoom: 8,  // Don't show layer below zoom 8
+        maxZoom: 18,  // Allow upscaling beyond zoom 12
         title: layerDef.name
       })
       map.value.addLayer(layer)
@@ -1362,7 +1700,7 @@ const createVectorLayerFromData = async (layerId, layerDef, area, layerData, opa
                 const layer = new VectorLayer({
                   source,
                   opacity: opacity,
-                  zIndex: 12,
+                  zIndex: 8, // Below district borders (15) and selection layers (20)
                   title: `${layerDef.name} - ${areaItem.name_en}`,
                 })
 
@@ -1430,15 +1768,15 @@ const createVectorLayerFromData = async (layerId, layerDef, area, layerData, opa
           features: [testFeature]
         })
         
-        const testLayer = new VectorLayer({
-          source: testSource,
-          opacity: 0.7,
-          zIndex: 12,
-          title: `${layerDef.name} - Test Layer`
-        })
-        
-        map.value.addLayer(testLayer)
-        areaLayers.push(testLayer)
+      const testLayer = new VectorLayer({
+        source: testSource,
+        opacity: 1.0,
+        zIndex: 8, // Below district borders (15) and selection layers (20)
+        title: `${layerDef.name} - Test Layer`
+      })
+      
+      map.value.addLayer(testLayer)
+      areaLayers.push(testLayer)
         
         console.log('Created test layer for country-wide visualization')
       }
@@ -1483,7 +1821,7 @@ const createVectorLayerFromData = async (layerId, layerDef, area, layerData, opa
   const layer = new VectorLayer({
     source,
     opacity: opacity,
-    zIndex: 12,
+    zIndex: 8, // Below district borders (15) and selection layers (20)
     title: layerDef.name,
   })
 
@@ -1581,24 +1919,40 @@ const createColoredGrid = (areaGeometry, extent, layerData, colorType) => {
 // Get color for layer value based on color scheme type
 const getLayerColor = (value, colorType, stats) => {
   console.log(`Getting color for value: ${value}, type: ${colorType}, stats:`, stats)
-  const opacity = 0.7
+  const opacity = 1.0  // Full opacity for better visibility
   
   switch (colorType) {
-    case 'diverging': // Rainfall slope: red-white-green
+    case 'diverging': // Rainfall slope: red-orange-yellow-lightgreen-darkgreen
       const normalized = (value - stats.min) / (stats.max - stats.min)
-      if (normalized < 0.5) {
-        // Red to white
-        const t = normalized * 2
-        const r = 220
-        const g = Math.round(32 + (255 - 32) * t)
-        const b = Math.round(38 + (255 - 38) * t)
+      
+      // Define color stops based on the legend image
+      if (normalized < 0.25) {
+        // Red to Orange (negative trend)
+        const t = normalized / 0.25
+        const r = 255
+        const g = Math.round(0 + (165 - 0) * t)
+        const b = 0
+        return `rgba(${r}, ${g}, ${b}, ${opacity})`
+      } else if (normalized < 0.5) {
+        // Orange to Yellow (negative to neutral)
+        const t = (normalized - 0.25) / 0.25
+        const r = 255
+        const g = Math.round(165 + (255 - 165) * t)
+        const b = 0
+        return `rgba(${r}, ${g}, ${b}, ${opacity})`
+      } else if (normalized < 0.75) {
+        // Yellow to Light Green (neutral to positive)
+        const t = (normalized - 0.5) / 0.25
+        const r = Math.round(255 - (255 - 144) * t)
+        const g = 255
+        const b = Math.round(0 + (238 - 0) * t)
         return `rgba(${r}, ${g}, ${b}, ${opacity})`
       } else {
-        // White to green
-        const t = (normalized - 0.5) * 2
-        const r = Math.round(255 - (255 - 22) * t)
-        const g = Math.round(255 - (255 - 163) * t)
-        const b = Math.round(255 - (255 - 74) * t)
+        // Light Green to Dark Green (positive trend)
+        const t = (normalized - 0.75) / 0.25
+        const r = Math.round(144 - (144 - 0) * t)
+        const g = Math.round(238 - (238 - 128) * t)
+        const b = Math.round(144 - (144 - 0) * t)
         return `rgba(${r}, ${g}, ${b}, ${opacity})`
       }
       
@@ -1889,12 +2243,102 @@ const zoomToDistrict = (districtName) => {
   }
 }
 
+// Load Tajikistan boundary and create boundary layer
+const loadTajikistanBoundary = async () => {
+  try {
+    console.log('Loading Tajikistan boundary...')
+    const geoJsonPath = '/storage/geoBoundaries-TJK-ADM2.geojson'
+
+    const response = await fetch(geoJsonPath)
+    const geoJsonData = await response.json()
+
+    // Create GeoJSON format parser
+    const geoJsonFormat = new GeoJSON()
+
+    // Parse all features and create boundary polygon
+    const features = geoJsonFormat.readFeatures(geoJsonData, {
+      featureProjection: 'EPSG:3857',
+    })
+
+    if (features.length > 0) {
+      // Create a union of all district features to get country boundary
+      let boundaryPolygon = features[0].getGeometry()
+      for (let i = 1; i < features.length; i++) {
+        const geom = features[i].getGeometry()
+        if (geom && boundaryPolygon) {
+          boundaryPolygon = boundaryPolygon.clone().extend(geom.getExtent())
+        }
+      }
+
+      // Store the boundary extent for checking
+      tajikistanBoundary.value = boundaryPolygon.getExtent()
+      
+      // Create a boundary layer with subtle outline
+      const boundarySource = new VectorSource({
+        features: features,
+      })
+
+      tajikistanBoundaryLayer.value = new VectorLayer({
+        source: boundarySource,
+        style: new Style({
+          fill: new Fill({
+            color: 'rgba(255, 255, 255, 0)', // Transparent fill
+          }),
+          stroke: new Stroke({
+            color: 'rgba(59, 130, 246, 0.3)', // Light blue outline
+            width: 2,
+          }),
+        }),
+        zIndex: 1, // Below districts but above base map
+      })
+
+      map.value.addLayer(tajikistanBoundaryLayer.value)
+      console.log('Tajikistan boundary loaded successfully')
+    }
+  } catch (error) {
+    console.warn('Could not load Tajikistan boundary:', error.message)
+  }
+}
+
+// Check if a coordinate is within Tajikistan boundary
+const isWithinBoundary = (coordinate) => {
+  if (!tajikistanBoundary.value) return true // If no boundary loaded, allow all
+
+  const [x, y] = coordinate
+  const [minX, minY, maxX, maxY] = tajikistanBoundary.value
+
+  // Check if coordinate is within bounding box
+  return x >= minX && x <= maxX && y >= minY && y <= maxY
+}
+
+// Check if a feature/geometry is within boundary
+const isFeatureWithinBoundary = (geometry) => {
+  if (!tajikistanBoundary.value || !geometry) return true
+
+  // Get extent of the geometry
+  const extent = geometry.getExtent()
+  const [minX, minY, maxX, maxY] = extent
+  const [boundMinX, boundMinY, boundMaxX, boundMaxY] = tajikistanBoundary.value
+
+  // Check if geometry extent overlaps with boundary
+  return !(
+    maxX < boundMinX ||
+    minX > boundMaxX ||
+    maxY < boundMinY ||
+    minY > boundMaxY
+  )
+}
+
 // Load GeoJSON automatically when map is ready
 const loadGeoJSONOnMapReady = async () => {
   try {
     console.log('Loading GeoJSON automatically...')
     const geoJsonPath = '/storage/geoBoundaries-TJK-ADM2.geojson'
 
+    // Load boundary first
+    await loadTajikistanBoundary()
+
+    // Then load districts layer
     await loadGeoJSONLayer(geoJsonPath, 'tajikistan-districts')
     console.log('GeoJSON layer loaded successfully automatically')
 
@@ -2145,10 +2589,11 @@ const highlightSelectedAreas = (selectedAreas) => {
         
         // Style the fallback feature with a different color
         fallbackFeature.setStyle(new Style({
-          fill: new Fill({
-            color: 'rgba(255, 165, 0, 0.3)' // Orange highlight for fallback
+          // No fill - only orange border for fallback highlight
+          stroke: new Stroke({
+            color: '#FFA500', // Orange border
+            width: 3
           })
-          // Removed stroke to eliminate borders
         }))
         
         highlightFeatures.push(fallbackFeature)
@@ -2191,10 +2636,11 @@ const highlightSelectedAreas = (selectedAreas) => {
         
         // Style the highlighted feature
         feature.setStyle(new Style({
-          fill: new Fill({
-            color: 'rgba(255, 255, 0, 0.3)' // Yellow highlight
+          // No fill - only yellow border for selected areas
+          stroke: new Stroke({
+            color: '#FFFF00', // Yellow border
+            width: 3
           })
-          // Removed stroke to eliminate borders
         }))
         
         highlightFeatures.push(feature)
@@ -2264,16 +2710,16 @@ const testVisualization = () => {
     features: [testFeature]
   })
   
-  const testLayer = new VectorLayer({
-    source: testSource,
-    opacity: 0.7,
-    zIndex: 15,
-    title: 'Test Layer'
-  })
-  
-  if (map.value) {
-    map.value.addLayer(testLayer)
-    console.log('Test layer added to map')
+const testLayer = new VectorLayer({
+  source: testSource,
+  opacity: 1.0,
+  zIndex: 8, // Below district borders (15) and selection layers (20)
+  title: 'Test Layer'
+})
+
+if (map.value) {
+  map.value.addLayer(testLayer)
+  console.log('Test layer added to map')
     console.log('Map layers count:', map.value.getLayers().getLength())
   } else {
     console.error('Map reference is null!')
@@ -2344,6 +2790,79 @@ onUnmounted(() => {
 .ol-attribution {
   bottom: 0.5em;
   right: 0.5em;
+}
+
+/* Modern scale line (measurement ruler) styling */
+:deep(.ol-scale-line) {
+  bottom: 1em;
+  left: 1em;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.9) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  transition: all 0.3s ease;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+:deep(.ol-scale-line):hover {
+  box-shadow: 
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  transform: translateY(-1px);
+}
+
+:deep(.ol-scale-line-inner) {
+  border: 3px solid #2563eb;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-align: center;
+  margin: 2px 0 0 0;
+  padding: 4px 6px;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.05) 100%);
+  will-change: contents, width;
+  transition: all 0.2s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+}
+
+/* Decorative scale bar top line with gradient */
+:deep(.ol-scale-line-inner)::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, #2563eb 20%, #2563eb 80%, transparent 100%);
+  z-index: 1;
+}
+
+/* Left endpoint marker */
+:deep(.ol-scale-line-inner)::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 0;
+  width: 3px;
+  height: 3px;
+  background: #2563eb;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
+  z-index: 2;
 }
 
 /* Smooth border animation styles */
