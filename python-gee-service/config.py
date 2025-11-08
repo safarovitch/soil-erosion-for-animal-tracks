@@ -39,6 +39,11 @@ class Config:
     # Storage paths
     STORAGE_PATH = os.getenv('STORAGE_PATH', '/var/www/rusle-icarda/storage/rusle-tiles')
     
+    # Laravel callback configuration
+    LARAVEL_BASE_URL = os.getenv('LARAVEL_BASE_URL', 'https://soil-erosion-tjk.wyzo.app')
+    LARAVEL_HOST_HEADER = os.getenv('LARAVEL_HOST_HEADER', 'soil-erosion-tjk.wyzo.app')
+    LARAVEL_VERIFY_TLS = os.getenv('LARAVEL_VERIFY_TLS', 'true').lower() != 'false'
+    
     # Performance tuning constants
     COMPLEX_GEOMETRY_THRESHOLD = int(os.getenv('COMPLEX_GEOMETRY_THRESHOLD', 500))  # coordinate count
     LARGE_AREA_THRESHOLD_KM2 = float(os.getenv('LARGE_AREA_THRESHOLD_KM2', 1000))

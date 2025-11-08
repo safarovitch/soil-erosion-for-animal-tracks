@@ -856,302 +856,100 @@ const loadDetailedErosionData = async (area) => {
 
   if (!area) return
 
-  try {
-    console.log('Loading detailed erosion data from backend for:', area.name_en || area.name)
+  const areaLabel = area.name_en || area.name || 'selected area'
 
-    // Determine area type
-    let areaType, areaId
+  try {
+    // Determine area type supported by availability endpoint
     if (area.area_type === 'country' || area.id === 0) {
-      areaType = 'country'
-      areaId = 0
-    } else {
-      areaType = area.region_id ? 'district' : 'region'
-      areaId = area.id
+      console.log('Skipping detailed erosion load for country-level selection')
+      emit('layer-warning', {
+        type: 'info',
+        title: 'Selection Required',
+        message: 'Please select a specific region or district to view erosion tiles.',
+        details: 'Country-wide erosion tiles are not generated.'
+      })
+      return
     }
-    
-    // Fetch real data from backend
-    // Use grid_size: 10 for fast response (<15s even for large regions)
-    const response = await axios.post('/api/erosion/detailed-grid', {
+
+    const areaType = area.region_id ? 'district' : 'region'
+    const areaId = area.id
+
+    // Ask backend for availability (this queues generation when needed)
+    const availabilityResponse = await axios.post('/api/erosion/check-availability', {
       area_type: areaType,
       area_id: areaId,
-      year: props.selectedYear || 2024,
-      grid_size: 10, // 10x10 = 100 cells (fast)
+      year: props.selectedYear || 2024
     })
 
-    if (!response.data.success) {
-      // Show user-friendly error message
-      const errorMsg = response.data.error || 'Failed to fetch detailed grid data'
-      console.error('Detailed grid error:', errorMsg)
-      emit('geometry-error', errorMsg)
-      return
-    }
+    const availability = availabilityResponse.data || {}
+    const status = availability.status
+    const taskId = availability.task_id
 
-    const gridData = response.data.data
-    console.log('Received grid data from backend:', gridData)
+    console.log(`Availability for ${areaLabel}:`, availability)
 
-    // Check if backend returned precomputed tiles
-    if (gridData.tiles) {
-      console.log('Using precomputed tiles:', gridData.tiles)
-      
+    if (status === 'available' && availability.tiles_url) {
       detailedErosionLayer.value = new TileLayer({
         source: new XYZ({
-          url: gridData.tiles,
-          crossOrigin: 'anonymous',
-          minZoom: 8,  // Tiles are only available for zoom 8-12
-          maxZoom: 12
+          url: availability.tiles_url,
+          crossOrigin: 'anonymous'
         }),
         opacity: 1.0,
-        zIndex: 8, // Below district borders (15) and selection layers (20)
-        minZoom: 8,  // Don't show layer below zoom 8
-        maxZoom: 18  // Allow upscaling beyond zoom 12
+        zIndex: 8,
+        minZoom: 6,
+        maxZoom: 18
       })
-      
+
       map.value.addLayer(detailedErosionLayer.value)
-      console.log('✓ Added precomputed tile layer (zoom 8-12)')
+      console.log('✓ Added precomputed erosion tile layer:', availability.tiles_url)
+
+      emit('detailed-erosion-loaded', {
+        areaId,
+        areaName: areaLabel,
+        cellCount: null,
+        statistics: availability.statistics || null
+      })
+
       return
     }
 
-    // Otherwise, render grid cells as vector layer
-    console.log('Using grid cells:', gridData.cells?.length, 'cells')
-
-    const geojsonFormat = new GeoJSON()
-    
-    // FALLBACK: Draw polygons with smooth colors (works immediately)
-    // Create features from grid cells
-    const detailedFeatures = gridData.cells.map(cell => {
-      const cellGeometry = geojsonFormat.readGeometry(cell.geometry, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
+    if (status === 'queued' || status === 'processing') {
+      emit('layer-warning', {
+        type: 'info',
+        title: status === 'queued' ? 'Erosion Tiles Queued' : 'Erosion Tiles Processing',
+        message: `${areaLabel} tiles are being prepared.`,
+        details: taskId
+          ? `Fresh erosion tiles are being generated. Task ID: ${taskId}.`
+          : 'Fresh erosion tiles are being generated and should be ready within about 5–10 minutes.'
       })
-
-      return new Feature({
-        geometry: cellGeometry,
-        erosionRate: cell.erosion_rate,
-        cellId: `${cell.x}-${cell.y}`,
-      })
-    })
-
-    const detailedSource = new VectorSource({
-      features: detailedFeatures,
-    })
-
-    // Style function with smooth color gradients
-    const detailedStyleFunction = (feature) => {
-      const erosionRate = feature.get('erosionRate')
-      return new Style({
-        fill: new Fill({
-          color: getErosionColor(erosionRate, 0.7),
-        }),
-        stroke: new Stroke({
-          color: getErosionColor(erosionRate, 0.3),
-          width: 0.5,
-        }),
-      })
+      return
     }
 
-    detailedErosionLayer.value = new VectorLayer({
-      source: detailedSource,
-      style: detailedStyleFunction,
-      zIndex: 8, // Below district borders (15) and selection layers (20)
-    })
-    
-    console.log('✓ Created vector layer with', detailedFeatures.length, 'cells')
-    
-    // TODO: Canvas heatmap implementation (commented out for now)
-    /*
-    // Create smooth gradient heatmap using Canvas interpolation
-    const bbox = gridData.bbox // [minLon, minLat, maxLon, maxLat] in EPSG:4326
-    const gridSize = gridData.grid_size
-    
-    // Transform bbox to EPSG:3857 for rendering
-    const bboxMin = fromLonLat([bbox[0], bbox[1]])
-    const bboxMax = fromLonLat([bbox[2], bbox[3]])
-    const bbox3857 = [bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1]]
-    
-    // Build erosion value grid
-    const erosionGrid = Array(gridSize).fill(null).map(() => Array(gridSize).fill(null))
-    gridData.cells.forEach(cell => {
-      if (cell.x < gridSize && cell.y < gridSize) {
-        erosionGrid[cell.y][cell.x] = cell.erosion_rate
-      }
-    })
-    
-    // Create canvas-based heatmap with smooth interpolation
-    const createHeatmapCanvas = (extent, resolution) => {
-      try {
-        const canvas = document.createElement('canvas')
-        const canvasWidth = Math.ceil((extent[2] - extent[0]) / resolution[0])
-        const canvasHeight = Math.ceil((extent[3] - extent[1]) / resolution[1])
-        
-        // Clamp canvas size to reasonable limits
-        canvas.width = Math.min(canvasWidth, 4096)
-        canvas.height = Math.min(canvasHeight, 4096)
-        
-        const ctx = canvas.getContext('2d')
-        const imageData = ctx.createImageData(canvas.width, canvas.height)
-        
-        console.log(`Rendering heatmap canvas: ${canvas.width}x${canvas.height}px`)
-      
-        // Bilinear interpolation for smooth gradients
-        for (let py = 0; py < canvas.height; py++) {
-          for (let px = 0; px < canvas.width; px++) {
-            // Convert pixel to map coordinates (EPSG:3857)
-            const x = extent[0] + (px * resolution[0])
-            const y = extent[3] - (py * resolution[1]) // Y is inverted
-          
-            // Convert to grid coordinates using transformed bbox
-            const gx = ((x - bbox3857[0]) / (bbox3857[2] - bbox3857[0])) * gridSize
-            const gy = ((bbox3857[3] - y) / (bbox3857[3] - bbox3857[1])) * gridSize
-            
-            // Bilinear interpolation
-            const x0 = Math.floor(gx)
-            const x1 = Math.min(x0 + 1, gridSize - 1)
-            const y0 = Math.floor(gy)
-            const y1 = Math.min(y0 + 1, gridSize - 1)
-            
-            const fx = gx - x0
-            const fy = gy - y0
-            
-            // Get corner values
-            const v00 = erosionGrid[y0]?.[x0] ?? null
-            const v10 = erosionGrid[y0]?.[x1] ?? null
-            const v01 = erosionGrid[y1]?.[x0] ?? null
-            const v11 = erosionGrid[y1]?.[x1] ?? null
-            
-            // Skip if no data
-            if (v00 === null && v10 === null && v01 === null && v11 === null) {
-              continue
-            }
-            
-            // Interpolate with available values
-            const values = [v00, v10, v01, v11].filter(v => v !== null)
-            const weights = [
-              v00 !== null ? (1-fx)*(1-fy) : 0,
-              v10 !== null ? fx*(1-fy) : 0,
-              v01 !== null ? (1-fx)*fy : 0,
-              v11 !== null ? fx*fy : 0
-            ]
-            
-            const totalWeight = weights.reduce((a, b) => a + b, 0)
-            const interpolatedValue = totalWeight > 0 
-              ? [v00, v10, v01, v11].reduce((sum, val, i) => sum + (val || 0) * weights[i], 0) / totalWeight
-              : null
-            
-            if (interpolatedValue !== null) {
-              // Get smooth color for interpolated value
-              const color = getErosionColorRGB(interpolatedValue)
-              const idx = (py * canvas.width + px) * 4
-              imageData.data[idx] = color.r
-              imageData.data[idx + 1] = color.g
-              imageData.data[idx + 2] = color.b
-              imageData.data[idx + 3] = color.a
-            }
-          }
-        }
-        
-        ctx.putImageData(imageData, 0, 0)
-        console.log('✓ Heatmap canvas rendered successfully')
-        return canvas
-        
-      } catch (error) {
-        console.error('Error creating heatmap canvas:', error)
-        // Return empty canvas on error
-        const canvas = document.createElement('canvas')
-        canvas.width = 1
-        canvas.height = 1
-        return canvas
-      }
-    }
-    
-    // Canvas implementation will be added later
-    // END CANVAS CODE */
-
-    // Add region boundary clipping if available
-    if (gridData.region_boundary) {
-      const boundaryGeometry = geojsonFormat.readGeometry(gridData.region_boundary, {
-        dataProjection: 'EPSG:4326',
-        featureProjection: 'EPSG:3857',
+    if (status === 'failed' || status === 'error') {
+      emit('layer-warning', {
+        type: 'error',
+        title: 'Erosion Tiles Unavailable',
+        message: `We could not load erosion tiles for ${areaLabel}.`,
+        details: availability.error || availability.error_message || 'Please try again later.'
       })
-      
-      // Use the render function to clip the layer to the region boundary
-      detailedErosionLayer.value.on('prerender', (event) => {
-        const ctx = event.context
-        const pixelRatio = event.frameState.pixelRatio
-        ctx.save()
-        
-        // Create clipping path from region boundary
-        const vectorContext = event.vectorContext
-        const coordinates = boundaryGeometry.getCoordinates()
-        
-        ctx.beginPath()
-        if (boundaryGeometry.getType() === 'Polygon') {
-          // Single polygon
-          coordinates[0].forEach((coord, i) => {
-            const pixel = map.value.getPixelFromCoordinate(coord)
-            if (i === 0) {
-              ctx.moveTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
-            } else {
-              ctx.lineTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
-            }
-          })
-        } else if (boundaryGeometry.getType() === 'MultiPolygon') {
-          // Multiple polygons
-          coordinates.forEach(polygon => {
-            polygon[0].forEach((coord, i) => {
-              const pixel = map.value.getPixelFromCoordinate(coord)
-              if (i === 0) {
-                ctx.moveTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
-              } else {
-                ctx.lineTo(pixel[0] * pixelRatio, pixel[1] * pixelRatio)
-              }
-            })
-            ctx.closePath()
-          })
-        }
-        ctx.clip()
-      })
-      
-      detailedErosionLayer.value.on('postrender', (event) => {
-        const ctx = event.context
-        ctx.restore()
-      })
-      
-      // Also add a boundary outline layer
-      const boundaryFeature = new Feature({
-        geometry: boundaryGeometry,
-      })
-      
-      const boundaryLayer = new VectorLayer({
-        source: new VectorSource({
-          features: [boundaryFeature],
-        }),
-        style: new Style({
-          stroke: new Stroke({
-            color: '#2563eb',
-            width: 2,
-          }),
-        }),
-        zIndex: 16, // Above erosion layer
-      })
-      
-      map.value.addLayer(boundaryLayer)
-      console.log('Added region boundary clipping and outline')
+      return
     }
 
-    map.value.addLayer(detailedErosionLayer.value)
-
-    console.log('✓ Smooth gradient heatmap layer added with', gridData.cells.length, 'data cells')
-
-    // Emit event to notify that detailed data is loaded
-    emit('detailed-erosion-loaded', {
-      areaId: area.id,
-      areaName: area.name_en || area.name,
-      cellCount: gridData.cells.length,
-      statistics: gridData.statistics,
+    emit('layer-warning', {
+      type: 'warning',
+      title: 'Erosion Tiles Pending',
+      message: `Erosion tiles for ${areaLabel} are not ready yet.`,
+      details: taskId
+        ? `Tile generation has been requested (Task ID: ${taskId}). Please check back shortly.`
+        : 'Tile generation has been requested. Please check back shortly.'
     })
-
   } catch (error) {
-    console.error('Error loading detailed erosion data:', error)
+    console.error('Error checking erosion tile availability:', error)
+    emit('layer-warning', {
+      type: 'error',
+      title: 'Erosion Tiles Unavailable',
+      message: `Failed to load erosion tiles for ${areaLabel}.`,
+      details: error.message || 'Please try again later.'
+    })
     emit('geometry-error', 'Failed to load detailed erosion data: ' + error.message)
   }
 }
@@ -2792,77 +2590,45 @@ onUnmounted(() => {
   right: 0.5em;
 }
 
-/* Modern scale line (measurement ruler) styling */
+/* Simple scale line (measurement ruler) styling - minimal design */
 :deep(.ol-scale-line) {
   bottom: 1em;
   left: 1em;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.9) 100%);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-radius: 8px;
-  padding: 8px 12px;
-  box-shadow: 
-    0 4px 6px -1px rgba(0, 0, 0, 0.1),
-    0 2px 4px -1px rgba(0, 0, 0, 0.06),
-    0 0 0 1px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  transition: all 0.3s ease;
+  background: transparent !important; /* No background container */
+  padding: 0;
+  border: none;
+  box-shadow: none;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-:deep(.ol-scale-line):hover {
-  box-shadow: 
-    0 10px 15px -3px rgba(0, 0, 0, 0.1),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05),
-    0 0 0 1px rgba(0, 0, 0, 0.05);
-  transform: translateY(-1px);
-}
-
+/* Simple scale bar - clean ruler design */
 :deep(.ol-scale-line-inner) {
-  border: 3px solid #2563eb;
+  border: 2px solid #333 !important; /* Simple dark border */
   border-top: none;
-  border-radius: 0 0 4px 4px;
-  color: #1e40af;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.025em;
+  border-radius: 0;
+  color: #333 !important; /* Dark text */
+  font-size: 12px;
+  font-weight: 500;
   text-align: center;
-  margin: 2px 0 0 0;
-  padding: 4px 6px;
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.05) 100%);
+  margin: 0;
+  padding: 2px 4px;
+  background: transparent !important; /* No background */
+  background-image: none !important; /* No bar patterns */
   will-change: contents, width;
-  transition: all 0.2s ease;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 24px;
+  min-height: 20px;
 }
 
-/* Decorative scale bar top line with gradient */
-:deep(.ol-scale-line-inner)::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent 0%, #2563eb 20%, #2563eb 80%, transparent 100%);
-  z-index: 1;
-}
-
-/* Left endpoint marker */
+/* Remove any decorative elements */
+:deep(.ol-scale-line-inner)::before,
 :deep(.ol-scale-line-inner)::after {
-  content: '';
-  position: absolute;
-  top: -4px;
-  left: 0;
-  width: 3px;
-  height: 3px;
-  background: #2563eb;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
-  z-index: 2;
+  display: none !important;
+}
+
+/* Remove any internal styling */
+:deep(.ol-scale-line-inner *) {
+  background: transparent !important;
+  border: none !important;
+  background-image: none !important;
 }
 
 /* Smooth border animation styles */

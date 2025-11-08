@@ -129,6 +129,39 @@ class ErosionTileController extends Controller
     }
 
     /**
+     * Callback from Python tasks when computation fails
+     */
+    public function taskFailed(Request $request)
+    {
+        try {
+            $result = $this->service->handleTaskFailure($request->all());
+            
+            Log::info('Task failure callback received', [
+                'task_id' => $request->input('task_id'),
+                'area' => $request->input('area_type') . ' ' . $request->input('area_id'),
+                'year' => $request->input('year'),
+                'error' => $request->input('error'),
+                'error_type' => $request->input('error_type')
+            ]);
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Task failure processed'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Task failure callback failed', [
+                'error' => $e->getMessage(),
+                'data' => $request->all()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Bulk precompute all areas (admin only)
      */
     public function precomputeAll(Request $request)

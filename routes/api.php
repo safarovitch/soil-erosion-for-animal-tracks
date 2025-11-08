@@ -107,6 +107,11 @@ Route::prefix('erosion')->group(function () {
     Route::post('/task-complete', 
         [ErosionTileController::class, 'taskComplete']
     );
+
+    // Callback from Python service when task fails
+    Route::post('/task-failed', 
+        [ErosionTileController::class, 'taskFailed']
+    );
 });
 
 // Custom datasets (public access)

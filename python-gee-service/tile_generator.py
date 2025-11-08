@@ -50,18 +50,17 @@ class MapTileGenerator:
             if npy_path.exists():
                 logger.info("Using sampled raster data")
                 data, bounds, metadata = self._load_sampled_data(npy_path)
+                projected_geometry = self._project_geometry_to_webmercator(geometry_json) if geometry_json else None
             else:
                 logger.info("Using GeoTIFF data")
                 try:
                     import rasterio
-                    with rasterio.open(geotiff_path) as src:
-                        data = src.read(1)
-                        bounds = src.bounds
-                        bounds = [bounds.left, bounds.bottom, bounds.right, bounds.top]
+                    data, bounds = self._load_raster_data_webmercator(geotiff_path)
+                    projected_geometry = self._project_geometry_to_webmercator(geometry_json) if geometry_json else None
                 except ImportError:
                     logger.warning("rasterio not available, trying fallback method")
                     # Fallback: create simple placeholder tiles
-                    return self._generate_placeholder_tiles(tiles_dir, bounds, zoom_levels)
+                    return self._generate_placeholder_tiles(tiles_dir, None, zoom_levels)
             
             # Apply colormap
             logger.info("Applying erosion colormap...")
@@ -72,7 +71,7 @@ class MapTileGenerator:
             for zoom in zoom_levels:
                 logger.info(f"Generating tiles for zoom level {zoom}...")
                 tiles_generated = self._generate_tiles_for_zoom(
-                    colored_data, bounds, tiles_dir, zoom, geometry_json
+                    colored_data, bounds, tiles_dir, zoom, projected_geometry
                 )
                 total_tiles += tiles_generated
                 logger.info(f"  ✓ Generated {tiles_generated} tiles at zoom {zoom}")
@@ -90,16 +89,108 @@ class MapTileGenerator:
         import pickle
         with open(npy_path, 'rb') as f:
             saved_data = pickle.load(f)
-        return saved_data['data'], saved_data['bounds'], saved_data
+        data = saved_data['data']
+        bounds = saved_data['bounds']
+        west, south = self._lonlat_to_webmercator(bounds[0], bounds[1])
+        east, north = self._lonlat_to_webmercator(bounds[2], bounds[3])
+        return data, [west, south, east, north], saved_data
+
+    def _load_raster_data_webmercator(self, geotiff_path):
+        """Load raster data and reproject to Web Mercator (EPSG:3857)."""
+        import rasterio
+        from rasterio.transform import array_bounds
+        from rasterio.warp import calculate_default_transform, reproject, Resampling
+
+        with rasterio.open(geotiff_path) as src:
+            src_crs = src.crs or 'EPSG:4326'
+            dst_crs = 'EPSG:3857'
+
+            if rasterio.crs.CRS.from_user_input(src_crs) != rasterio.crs.CRS.from_user_input(dst_crs):
+                transform, width, height = calculate_default_transform(
+                    src_crs,
+                    dst_crs,
+                    src.width,
+                    src.height,
+                    *src.bounds
+                )
+                data = np.zeros((height, width), dtype=np.float32)
+                reproject(
+                    source=rasterio.band(src, 1),
+                    destination=data,
+                    src_transform=src.transform,
+                    src_crs=src_crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.bilinear,
+                    dst_nodata=0,
+                )
+            else:
+                data = src.read(1).astype(np.float32)
+                transform = src.transform
+                height, width = data.shape
+
+        bounds = array_bounds(data.shape[0], data.shape[1], transform)
+        return data, [bounds[0], bounds[1], bounds[2], bounds[3]]
+
+    def _project_geometry_to_webmercator(self, geometry_json):
+        """Project GeoJSON geometry coordinates to Web Mercator."""
+        if not geometry_json:
+            return None
+
+        def project_coords(coords):
+            projected = []
+            for lon, lat in coords:
+                x, y = self._lonlat_to_webmercator(lon, lat)
+                projected.append([x, y])
+            return projected
+
+        geom_type = geometry_json.get('type')
+        if geom_type == 'Polygon':
+            return {
+                'type': 'Polygon',
+                'coordinates': [project_coords(ring) for ring in geometry_json.get('coordinates', [])]
+            }
+        if geom_type == 'MultiPolygon':
+            return {
+                'type': 'MultiPolygon',
+                'coordinates': [
+                    [project_coords(ring) for ring in polygon]
+                    for polygon in geometry_json.get('coordinates', [])
+                ]
+            }
+        return geometry_json
+
+    def _lonlat_to_webmercator(self, lon, lat):
+        """Convert longitude/latitude in degrees to Web Mercator meters."""
+        origin_shift = 20037508.342789244
+        x = lon * origin_shift / 180.0
+        lat = max(min(lat, 89.9999), -89.9999)
+        y = math.log(math.tan((90 + lat) * math.pi / 360.0)) * origin_shift / math.pi
+        return x, y
+
+    def _webmercator_to_lonlat(self, x, y):
+        """Convert Web Mercator meters to longitude/latitude in degrees."""
+        origin_shift = 20037508.342789244
+        lon = (x / origin_shift) * 180.0
+        lat = (y / origin_shift) * 180.0
+        lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180.0)) - math.pi / 2)
+        return lon, lat
     
     def _generate_tiles_for_zoom(self, colored_data, bounds, tiles_dir, zoom, geometry_json=None):
         """Generate all tiles for a specific zoom level"""
         tile_count = 0
+
+        lon_min, lat_min = self._webmercator_to_lonlat(bounds[0], bounds[1])
+        lon_max, lat_max = self._webmercator_to_lonlat(bounds[2], bounds[3])
+        if lon_min > lon_max:
+            lon_min, lon_max = lon_max, lon_min
+        if lat_min > lat_max:
+            lat_min, lat_max = lat_max, lat_min
         
         # Get all tiles that intersect the bounds at this zoom level
         tiles = list(mercantile.tiles(
-            bounds[0], bounds[1],  # west, south
-            bounds[2], bounds[3],  # east, north
+            lon_min, lat_min,  # west, south
+            lon_max, lat_max,  # east, north
             zooms=zoom
         ))
         
@@ -107,7 +198,7 @@ class MapTileGenerator:
         
         for tile in tiles:
             # Calculate tile bounds in lat/lon
-            tile_bounds = mercantile.bounds(tile)
+            tile_bounds = mercantile.xy_bounds(tile)
             
             # Extract and render tile
             tile_image = self._render_tile(
@@ -148,10 +239,10 @@ class MapTileGenerator:
         west, south, east, north = data_bounds
         
         # Convert tile bounds to data coordinates
-        data_west = (tile_bounds.west - west) / (east - west) * data_width
-        data_east = (tile_bounds.east - west) / (east - west) * data_width
-        data_north = (north - tile_bounds.north) / (north - south) * data_height
-        data_south = (north - tile_bounds.south) / (north - south) * data_height
+        data_west = (tile_bounds.left - west) / (east - west) * data_width
+        data_east = (tile_bounds.right - west) / (east - west) * data_width
+        data_north = (north - tile_bounds.top) / (north - south) * data_height
+        data_south = (north - tile_bounds.bottom) / (north - south) * data_height
         
         # Clamp to data bounds
         data_west = max(0, min(data_width - 1, data_west))
@@ -205,8 +296,8 @@ class MapTileGenerator:
             
             # Create tile polygon
             tile_polygon = box(
-                tile_bounds.west, tile_bounds.south,
-                tile_bounds.east, tile_bounds.north
+                tile_bounds.left, tile_bounds.bottom,
+                tile_bounds.right, tile_bounds.top
             )
             
             # Convert GeoJSON to Shapely geometry
@@ -224,13 +315,13 @@ class MapTileGenerator:
             # Transform geometry coordinates to pixel coordinates
             # Tile bounds: [west, south, east, north]
             # Pixel coordinates: [0, 0] to [tile_size, tile_size]
-            lon_range = tile_bounds.east - tile_bounds.west
-            lat_range = tile_bounds.north - tile_bounds.south
+            lon_range = tile_bounds.right - tile_bounds.left
+            lat_range = tile_bounds.top - tile_bounds.bottom
             
             def transform_coords(lon, lat):
                 """Transform lon/lat to pixel coordinates"""
-                x = int(((lon - tile_bounds.west) / lon_range) * tile_size)
-                y = int(((tile_bounds.north - lat) / lat_range) * tile_size)
+                x = int(((lon - tile_bounds.left) / lon_range) * tile_size)
+                y = int(((tile_bounds.top - lat) / lat_range) * tile_size)
                 return x, y
             
             # Extract coordinates from geometry and draw polygon

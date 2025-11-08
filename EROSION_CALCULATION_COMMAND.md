@@ -208,3 +208,7 @@ The command uses the Python GEE service endpoint:
 - `erosion:precompute-latest-year` - Precompute latest year for all areas
 
 
+
+
+
+

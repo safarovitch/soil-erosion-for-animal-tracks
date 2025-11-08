@@ -44,29 +44,75 @@ def timeout_wrapper(func, timeout_seconds=600):
 class RUSLECalculator:
     """RUSLE Calculator for soil erosion estimation"""
     
+    LONG_TERM_R_START_YEAR = 1994
+    LONG_TERM_R_END_YEAR = 2024  # Exclusive upper bound for filterDate
+    FLOW_ACC_GRID_SIZE = 300  # meters, matches HydroSHEDS 30 arc-second (~927m) res resampled to 300m exports
+    
     def __init__(self):
         pass
     
-    def compute_r_factor(self, year):
+    @staticmethod
+    def _clip_image(image, geometry):
+        if geometry:
+            return image.clip(geometry)
+        return image
+    
+    @staticmethod
+    def _filter_collection(collection, geometry):
+        if geometry:
+            return collection.filterBounds(geometry)
+        return collection
+    
+    def _load_modis_landcover(self, year, geometry):
+        """Load MODIS land cover image for supplied year, clipped to geometry"""
+        start_date = f'{year}-01-01'
+        end_date = f'{year}-12-31'
+        collection = ee.ImageCollection('MODIS/061/MCD12Q1') \
+            .filterDate(start_date, end_date)
+        collection = self._filter_collection(collection, geometry)
+        
+        # Fallback to the provided GEE code default (2023) if collection is empty
+        land_cover_image = ee.Image(ee.Algorithms.If(
+            collection.size().gt(0),
+            collection.first(),
+            ee.Image('MODIS/061/MCD12Q1/2023_01_01')
+        ))
+        
+        land_cover_image = land_cover_image.select('LC_Type1')
+        return self._clip_image(land_cover_image, geometry)
+    
+    def compute_r_factor(self, year, geometry=None, use_long_term=True):
         """
         Compute R-Factor (Rainfall Erosivity)
         Using CHIRPS precipitation data
         """
         try:
-            start_date = f'{year}-01-01'
-            end_date = f'{year}-12-31'
+            if use_long_term:
+                start_year = self.LONG_TERM_R_START_YEAR
+                end_year = self.LONG_TERM_R_END_YEAR
+                start_date = f'{start_year}-01-01'
+                end_date = f'{end_year}-01-01'
+                years = max(1, end_year - start_year)
+            else:
+                start_date = f'{year}-01-01'
+                end_date = f'{year + 1}-01-01'
+                years = 1
             
             # Load CHIRPS precipitation data
             chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
                 .filterDate(start_date, end_date) \
                 .select('precipitation')
+            chirps = self._filter_collection(chirps, geometry)
             
             # Calculate annual precipitation
-            annual_precip = chirps.sum()
+            total_precip = chirps.sum().toFloat()
+            mean_precip = total_precip.divide(years)
             
-            # Simplified R-factor calculation
-            # R = 0.0483 * P^1.61 (where P is annual precipitation in mm)
-            r_factor = annual_precip.pow(1.61).multiply(0.0483)
+            # Linear R-factor approximation from GEE workflow
+            # R = 0.562 * P_annual - 8.12 (P in mm)
+            r_factor = mean_precip.multiply(0.562).subtract(8.12)
+            r_factor = r_factor.max(0)
+            r_factor = self._clip_image(r_factor, geometry)
             
             return r_factor.rename('R_factor')
             
@@ -74,25 +120,40 @@ class RUSLECalculator:
             logger.error(f"Failed to compute R-factor: {str(e)}")
             raise
     
-    def compute_k_factor(self):
+    def compute_k_factor(self, geometry=None, structure_code=2, permeability_code=3):
         """
         Compute K-Factor (Soil Erodibility)
-        Using SoilGrids data
+        Using OpenLandMap soil fraction data
         """
         try:
-            # Load soil data from SoilGrids (select first band - 0-5cm depth, most relevant for erosion)
-            clay = ee.Image('projects/soilgrids-isric/clay_mean').select(0).divide(100.0)
-            silt = ee.Image('projects/soilgrids-isric/silt_mean').select(0).divide(100.0)
-            sand = ee.Image('projects/soilgrids-isric/sand_mean').select(0).divide(100.0)
+            clay = ee.Image("OpenLandMap/SOL/SOL_CLAY-WFRACTION_USDA-3A1A1A_M/v02").select('b0')
+            sand = ee.Image("OpenLandMap/SOL/SOL_SAND-WFRACTION_USDA-3A1A1A_M/v02").select('b0')
+            organic_carbon = ee.Image("OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02").select('b0')
             
-            # Calculate M value
-            M = silt.add(sand.multiply(0.1)).multiply(100)
+            clay = self._clip_image(clay, geometry)
+            sand = self._clip_image(sand, geometry)
+            organic_carbon = self._clip_image(organic_carbon, geometry)
             
-            # Simplified K-factor calculation
-            # K = M * 0.0001 * 12 - 0.02 * (sand * 0.02 + 0.03)
-            k_factor = M.multiply(0.0001).multiply(12).subtract(0.02) \
-                .multiply(sand.multiply(0.02).add(0.03)) \
-                .clamp(0.01, 0.7)
+            # Convert SOC (%) to organic matter (%)
+            organic_matter = organic_carbon.multiply(0.01724)
+            
+            # Derive silt as residual
+            silt = ee.Image.constant(100).subtract(sand).subtract(clay)
+            
+            # Compute M parameter
+            M = silt.add(sand.multiply(ee.Image.constant(100).subtract(clay)))
+            
+            base_k = ee.Image(27.66) \
+                .multiply(M.pow(1.14)) \
+                .multiply(1e-8) \
+                .multiply(ee.Image(12).subtract(organic_matter))
+            
+            k_factor = base_k \
+                .add(ee.Image(0.0043).multiply(ee.Image(structure_code).subtract(2))) \
+                .add(ee.Image(0.0033).multiply(ee.Image(permeability_code).subtract(3)))
+            
+            k_factor = k_factor.max(0)
+            k_factor = self._clip_image(k_factor, geometry)
             
             return k_factor.rename('K_factor')
             
@@ -100,38 +161,33 @@ class RUSLECalculator:
             logger.error(f"Failed to compute K-factor: {str(e)}")
             raise
     
-    def compute_ls_factor(self):
+    def compute_ls_factor(self, geometry=None, grid_size=None):
         """
         Compute LS-Factor (Slope Length and Steepness)
-        Using SRTM DEM
+        Using SRTM DEM and HydroSHEDS flow accumulation
         """
         try:
-            # Load DEM (explicitly select elevation band)
+            grid_size = grid_size or self.FLOW_ACC_GRID_SIZE
+            
             dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+            dem = self._clip_image(dem, geometry)
             
-            # Calculate slope in degrees
-            slope = ee.Terrain.slope(dem)
+            slope_deg = ee.Terrain.slope(dem)
+            slope_rad = slope_deg.multiply(math.pi / 180.0)
+            slope_rad = slope_rad.where(slope_rad.eq(0), 0.0001)
+            sin_slope = slope_rad.sin()
             
-            # Estimate flow accumulation (simplified)
-            flow_acc = dem.focal_max(90).subtract(dem)
-            slope_length = flow_acc.multiply(30)  # 30m pixel size
+            flow_acc = ee.Image("WWF/HydroSHEDS/30ACC")
+            flow_acc = self._clip_image(flow_acc, geometry)
+            flow_acc = flow_acc.where(flow_acc.eq(0), 1)
             
-            # Calculate L-factor
-            m = slope.divide(100).add(1).multiply(0.5)
-            l_factor = slope_length.divide(22.13).pow(m)
+            ls_factor = flow_acc.multiply(grid_size) \
+                .divide(22.13) \
+                .pow(0.4) \
+                .multiply(sin_slope.divide(0.0896).pow(1.3))
             
-            # Calculate S-factor
-            slope_rad = slope.multiply(math.pi / 180)
-            s_factor = ee.Image().expression(
-                'slope < 9 ? slope * 0.065 * 1.7 + 0.065 : sin(slope_rad) * 16.8 - 0.5',
-                {
-                    'slope': slope,
-                    'slope_rad': slope_rad
-                }
-            )
-            
-            # Combine L and S factors (ensure single band output)
-            ls_factor = l_factor.multiply(s_factor).clamp(0, 300)
+            ls_factor = ls_factor.max(0)
+            ls_factor = self._clip_image(ls_factor, geometry)
             
             return ls_factor.rename('LS_factor')
             
@@ -139,33 +195,20 @@ class RUSLECalculator:
             logger.error(f"Failed to compute LS-factor: {str(e)}")
             raise
     
-    def compute_c_factor(self, year):
+    def compute_c_factor(self, year, geometry=None):
         """
         Compute C-Factor (Cover Management)
-        Using Sentinel-2 NDVI
+        Using MODIS land cover mapping
         """
         try:
-            start_date = f'{year}-01-01'
-            end_date = f'{year}-12-31'
+            land_cover = self._load_modis_landcover(year, geometry)
             
-            # Load Sentinel-2 data
-            s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
-                .filterDate(start_date, end_date) \
-                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+            # Remap MODIS IGBP classes to C-factor values (based on provided GEE script)
+            class_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            c_values = [0.05, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.05, 0.1, 0.1, 0.0, 0.15, 0.01, 0.15, 0.0, 0.4, 0.0]
             
-            # Calculate NDVI
-            def calculate_ndvi(image):
-                nir = image.select('B8')
-                red = image.select('B4')
-                ndvi = nir.subtract(red).divide(nir.add(red)).rename('NDVI')
-                return ndvi
-            
-            ndvi_collection = s2.map(calculate_ndvi)
-            mean_ndvi = ndvi_collection.mean()
-            
-            # Convert NDVI to C-factor
-            # C = (1 - NDVI) / 2, clamped between 0.001 and 1
-            c_factor = mean_ndvi.multiply(-1).add(1).divide(2).clamp(0.001, 1.0)
+            c_factor = land_cover.remap(class_ids, c_values, 0).rename('C_factor')
+            c_factor = self._clip_image(c_factor, geometry)
             
             return c_factor.rename('C_factor')
             
@@ -173,40 +216,30 @@ class RUSLECalculator:
             logger.error(f"Failed to compute C-factor: {str(e)}")
             raise
     
-    def compute_p_factor(self, year):
+    def compute_p_factor(self, year, geometry=None):
         """
         Compute P-Factor (Conservation Practice)
-        Using ESA WorldCover land cover classification
+        Using MODIS land cover with slope-dependent coefficients for cropland
         """
         try:
-            # Load land cover data
-            land_cover = ee.Image('ESA/WorldCover/v100/2020').select('Map')
+            land_cover = self._load_modis_landcover(year, geometry)
             
-            # Map land cover classes to P-factor values
-            # 10: Tree cover - 0.1
-            # 20: Shrubland - 0.2
-            # 30: Grassland - 0.3
-            # 40: Cropland - 0.5
-            # 50: Built-up - 1.0
-            # 60: Bare/sparse - 1.0
-            # 70: Snow/ice - 0.1
-            # 80: Water - 0.0
-            # 90: Wetlands - 0.3
-            # 95: Mangroves - 0.1
-            # 100: Moss/lichen - 0.3
+            dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+            dem = self._clip_image(dem, geometry)
+            slope_deg = ee.Terrain.slope(dem)
             
-            p_factor = land_cover \
-                .where(land_cover.eq(10), 0.1) \
-                .where(land_cover.eq(20), 0.2) \
-                .where(land_cover.eq(30), 0.3) \
-                .where(land_cover.eq(40), 0.5) \
-                .where(land_cover.eq(50), 1.0) \
-                .where(land_cover.eq(60), 1.0) \
-                .where(land_cover.eq(70), 0.1) \
-                .where(land_cover.eq(80), 0.0) \
-                .where(land_cover.eq(90), 0.3) \
-                .where(land_cover.eq(95), 0.1) \
-                .where(land_cover.eq(100), 0.3)
+            p_factor = ee.Image.constant(1.0)
+            p_factor = self._clip_image(p_factor, geometry)
+            
+            cropland = land_cover.eq(12)
+            
+            p_factor = p_factor.where(cropland.And(slope_deg.lte(5)), 0.10)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(5)).And(slope_deg.lte(10)), 0.12)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(10)).And(slope_deg.lte(20)), 0.14)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(20)).And(slope_deg.lte(30)), 0.19)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(30)).And(slope_deg.lte(50)), 0.25)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(50)).And(slope_deg.lte(100)), 0.33)
+            p_factor = p_factor.where(cropland.And(slope_deg.gt(100)), 0.33)
             
             return p_factor.rename('P_factor')
             
@@ -230,11 +263,11 @@ class RUSLECalculator:
             logger.info(f"Computing RUSLE for year {year} at {scale}m resolution")
             
             # Compute all factors
-            r_factor = self.compute_r_factor(year)
-            k_factor = self.compute_k_factor()
-            ls_factor = self.compute_ls_factor()
-            c_factor = self.compute_c_factor(year)
-            p_factor = self.compute_p_factor(year)
+            r_factor = self.compute_r_factor(year, geometry)
+            k_factor = self.compute_k_factor(geometry)
+            ls_factor = self.compute_ls_factor(geometry)
+            c_factor = self.compute_c_factor(year, geometry)
+            p_factor = self.compute_p_factor(year, geometry)
             
             # Calculate soil loss: A = R * K * LS * C * P
             soil_loss = r_factor.multiply(k_factor) \

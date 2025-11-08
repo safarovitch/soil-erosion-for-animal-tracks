@@ -3,10 +3,15 @@ GeoTIFF Raster Generator for RUSLE Erosion Data
 Exports RUSLE computation results to GeoTIFF format
 """
 import ee
-import requests
 import numpy as np
 import logging
+import math
+import tempfile
 from pathlib import Path
+
+import requests
+import rasterio
+from rasterio.merge import merge
 from gee_service import gee_service
 from rusle_calculator import RUSLECalculator
 
@@ -75,26 +80,23 @@ class ErosionRasterGenerator:
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / 'erosion.tif'
             
-            # Calculate area to determine export method
-            area_km2 = complexity['area_km2']
-            
-            logger.info(f"Area: {area_km2:.2f} km²")
-            
-            if area_km2 < 2000:
-                # Small/medium area - use getThumbURL for direct download
-                logger.info("Using direct download method (getThumbURL)")
-                self._download_small_area(
-                    soil_loss_image, 
-                    original_geom,  # Use original for accurate boundaries
+            tile_count = 0
+            tiling_error = None
+            try:
+                tile_count = self._download_tiled_image(
+                    soil_loss_image,
+                    original_geom,
                     output_path,
-                    scale
+                    scale=scale
                 )
-            else:
-                # Large area - use simpler method with sampling
-                logger.info("Using sampling method for large area")
+                logger.info(f"✓ Downloaded GeoTIFF via {tile_count} tiles")
+            except Exception as tiling_exc:
+                logger.error(f"Tiled download failed: {tiling_exc}", exc_info=True)
+                tiling_error = str(tiling_exc)
+                logger.info("Falling back to sampling-based raster generation...")
                 self._generate_from_samples(
                     soil_loss_image,
-                    original_geom,  # Use original for accurate boundaries
+                    original_geom,
                     output_path,
                     bbox,
                     scale
@@ -108,70 +110,20 @@ class ErosionRasterGenerator:
             
             # Prepare metadata
             metadata = {
-                'area_km2': area_km2,
+                'area_km2': complexity['area_km2'],
                 'complexity': complexity['complexity_level'],
                 'scale': scale,
                 'simplify_tolerance': tolerance,
                 'bbox': bbox,
-                'original_geometry': geometry_json  # Store original geometry for tile masking
+                'original_geometry': geometry_json,  # Store original geometry for tile masking
+                'tile_count': tile_count,
+                'tiling_error': tiling_error
             }
             
             return str(output_path), statistics, metadata
             
         except Exception as e:
             logger.error(f"Failed to generate GeoTIFF: {str(e)}", exc_info=True)
-            raise
-    
-    def _download_small_area(self, image, geometry, output_path, scale):
-        """Download GeoTIFF for small/medium areas using getThumbURL"""
-        try:
-            # Get bounds
-            bounds = geometry.bounds().getInfo()
-            coords = bounds['coordinates'][0]
-            lons = [c[0] for c in coords]
-            lats = [c[1] for c in coords]
-            
-            bbox = [min(lons), min(lats), max(lons), max(lats)]
-            
-            # Calculate dimensions based on scale
-            width_deg = bbox[2] - bbox[0]
-            height_deg = bbox[3] - bbox[1]
-            width_px = int((width_deg * 111000) / scale)  # ~111km per degree
-            height_px = int((height_deg * 111000) / scale)
-            
-            # Limit dimensions to prevent timeout
-            max_dim = 4096
-            if width_px > max_dim or height_px > max_dim:
-                scale_factor = max(width_px, height_px) / max_dim
-                width_px = int(width_px / scale_factor)
-                height_px = int(height_px / scale_factor)
-            
-            dimensions = f'{width_px}x{height_px}'
-            
-            logger.info(f"Requesting GeoTIFF: {dimensions} pixels")
-            
-            # Request GeoTIFF from GEE
-            url = image.getThumbURL({
-                'min': 0,
-                'max': 200,
-                'dimensions': dimensions,
-                'region': geometry,
-                'format': 'GEO_TIFF'
-            })
-            
-            # Download
-            logger.info("Downloading GeoTIFF from GEE...")
-            response = requests.get(url, timeout=300)
-            response.raise_for_status()
-            
-            # Save to file
-            with open(output_path, 'wb') as f:
-                f.write(response.content)
-            
-            logger.info(f"✓ Downloaded {len(response.content) / 1024 / 1024:.2f} MB")
-            
-        except Exception as e:
-            logger.error(f"Download failed: {str(e)}")
             raise
     
     def _generate_from_samples(self, image, geometry, output_path, bbox, scale):
@@ -257,6 +209,111 @@ class ErosionRasterGenerator:
             logger.error(f"Sampling failed: {str(e)}")
             raise
     
+    def _download_tiled_image(self, image, geometry, output_path, scale, max_pixels=1024):
+        """
+        Download an image by splitting the region into manageable tiles and mosaicking.
+        """
+        bounds = geometry.bounds().getInfo()
+        min_lon, min_lat, max_lon, max_lat = bounds['coordinates'][0][0]
+        for coord in bounds['coordinates'][0]:
+            min_lon = min(min_lon, coord[0])
+            min_lat = min(min_lat, coord[1])
+            max_lon = max(max_lon, coord[0])
+            max_lat = max(max_lat, coord[1])
+
+        width_deg = max_lon - min_lon
+        height_deg = max_lat - min_lat
+        if width_deg <= 0 or height_deg <= 0:
+            raise ValueError("Geometry bounds are invalid or empty.")
+
+        meters_per_degree = 111000  # Approximate conversion at Tajikistan latitude
+
+        tile_width_deg = max_pixels * scale / meters_per_degree
+        tile_height_deg = max_pixels * scale / meters_per_degree
+        tile_width_deg = max(tile_width_deg, width_deg)
+        tile_height_deg = max(tile_height_deg, height_deg)
+
+        cols = max(1, math.ceil(width_deg / tile_width_deg))
+        rows = max(1, math.ceil(height_deg / tile_height_deg))
+        tile_width_deg = width_deg / cols
+        tile_height_deg = height_deg / rows
+
+        logger.info(f"Tiling geometry into {cols} x {rows} grid (scale {scale}m, max {max_pixels}px)")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tile_paths = []
+
+            for row in range(rows):
+                for col in range(cols):
+                    tile_min_lon = min_lon + col * tile_width_deg
+                    tile_max_lon = min(tile_min_lon + tile_width_deg, max_lon)
+                    tile_min_lat = min_lat + row * tile_height_deg
+                    tile_max_lat = min(tile_min_lat + tile_height_deg, max_lat)
+
+                    tile_rect = ee.Geometry.Rectangle([tile_min_lon, tile_min_lat, tile_max_lon, tile_max_lat])
+                    tile_geom = geometry.intersection(tile_rect, ee.ErrorMargin(1))
+
+                    try:
+                        area = tile_geom.area(maxError=1).getInfo()
+                    except Exception:
+                        area = 0
+
+                    if area <= 0:
+                        continue
+
+                    tile_width_px = max(1, int(((tile_max_lon - tile_min_lon) * meters_per_degree) / scale))
+                    tile_height_px = max(1, int(((tile_max_lat - tile_min_lat) * meters_per_degree) / scale))
+                    tile_width_px = min(tile_width_px, max_pixels)
+                    tile_height_px = min(tile_height_px, max_pixels)
+
+                    if tile_width_px < 10 or tile_height_px < 10:
+                        continue
+
+                    url = image.getThumbURL({
+                        'min': 0,
+                        'max': 200,
+                        'dimensions': f'{tile_width_px}x{tile_height_px}',
+                        'region': tile_geom,
+                        'format': 'GEO_TIFF'
+                    })
+
+                    timeout = min(600, 300 + (tile_width_px * tile_height_px / 10000))
+                    tile_path = Path(tmpdir) / f"tile_{row}_{col}.tif"
+
+                    logger.info(f"Downloading tile ({row+1}/{rows}, {col+1}/{cols}) "
+                                f"{tile_width_px}x{tile_height_px}px timeout={int(timeout)}s")
+
+                    response = requests.get(url, timeout=int(timeout))
+                    response.raise_for_status()
+
+                    with open(tile_path, 'wb') as f:
+                        f.write(response.content)
+
+                    tile_paths.append(tile_path)
+
+            if not tile_paths:
+                raise RuntimeError("Tiled download produced no tiles.")
+
+            datasets = [rasterio.open(str(path)) for path in tile_paths]
+            try:
+                mosaic, out_transform = merge(datasets)
+                out_meta = datasets[0].meta.copy()
+                out_meta.update({
+                    "driver": "GTiff",
+                    "height": mosaic.shape[1],
+                    "width": mosaic.shape[2],
+                    "transform": out_transform,
+                    "compress": "lzw"
+                })
+
+                with rasterio.open(output_path, 'w', **out_meta) as dest:
+                    dest.write(mosaic)
+            finally:
+                for ds in datasets:
+                    ds.close()
+
+            return len(tile_paths)
+
     def _numpy_to_geotiff(self, data, bounds, output_path):
         """
         Convert numpy array to proper GeoTIFF using rasterio

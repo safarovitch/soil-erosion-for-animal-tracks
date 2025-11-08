@@ -39,7 +39,6 @@ class ErosionTileService
                 'status' => 'available',
                 'tiles_url' => $map->tile_url,
                 'statistics' => $map->statistics,
-                'metadata' => $map->metadata,
                 'computed_at' => $map->computed_at?->toISOString()
             ];
         }
@@ -115,9 +114,11 @@ class ErosionTileService
 
             // Create or update database record
             if ($existingMap) {
+                $metadata = $existingMap->metadata ?? [];
+                $metadata['task_id'] = $taskId;
                 $existingMap->update([
                     'status' => 'queued',
-                    'metadata' => ['task_id' => $taskId],
+                    'metadata' => $metadata,
                     'error_message' => null
                 ]);
             } else {
@@ -126,7 +127,10 @@ class ErosionTileService
                     'area_id' => $areaId,
                     'year' => $year,
                     'status' => 'queued',
-                    'metadata' => ['task_id' => $taskId, 'bbox' => $bbox]
+                    'metadata' => [
+                        'task_id' => $taskId,
+                        'bbox' => $bbox
+                    ]
                 ]);
             }
 
@@ -317,6 +321,74 @@ class ErosionTileService
 
         return [
             'status' => 'completed',
+            'map_id' => $map->id
+        ];
+    }
+
+    /**
+     * Handle task failure callback from Python service
+     */
+    public function handleTaskFailure(array $data): array
+    {
+        $taskId = $data['task_id'] ?? null;
+        $areaType = $data['area_type'] ?? null;
+        $areaId = $data['area_id'] ?? null;
+        $year = $data['year'] ?? null;
+        $error = $data['error'] ?? 'Unknown error';
+        $errorType = $data['error_type'] ?? 'Exception';
+
+        if (!$taskId || !$areaType || !$areaId || !$year) {
+            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, year');
+        }
+
+        // Find the map record
+        $map = PrecomputedErosionMap::where([
+            'area_type' => $areaType,
+            'area_id' => $areaId,
+            'year' => $year
+        ])->first();
+
+        if (!$map) {
+            Log::warning("No map found for failed task: {$areaType} {$areaId}, year {$year}");
+            
+            // Create new record with failed status
+            $map = PrecomputedErosionMap::create([
+                'area_type' => $areaType,
+                'area_id' => $areaId,
+                'year' => $year,
+                'status' => 'failed',
+                'error_message' => $error,
+                'metadata' => array_merge(
+                    $data['metadata'] ?? [],
+                    [
+                        'task_id' => $taskId,
+                        'error_type' => $errorType
+                    ]
+                )
+            ]);
+            
+            Log::info("New failed map record created: {$areaType} {$areaId}, year {$year}");
+        } else {
+            // Update existing record to failed
+            $map->update([
+                'status' => 'failed',
+                'error_message' => $error,
+                'metadata' => array_merge(
+                    $map->metadata ?? [],
+                    $data['metadata'] ?? [],
+                    [
+                        'task_id' => $taskId,
+                        'error_type' => $errorType,
+                        'failed_at' => now()->toIso8601String()
+                    ]
+                )
+            ]);
+            
+            Log::info("Map updated to failed: {$areaType} {$areaId}, year {$year}");
+        }
+
+        return [
+            'status' => 'failed',
             'map_id' => $map->id
         ];
     }

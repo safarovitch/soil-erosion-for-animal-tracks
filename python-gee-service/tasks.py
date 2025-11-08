@@ -5,11 +5,36 @@ from celery_app import celery_app
 from raster_generator import ErosionRasterGenerator
 from tile_generator import MapTileGenerator
 from gee_service import gee_service
+from config import Config
 import logging
 import requests
 import json
+from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
+
+
+def _post_to_laravel(path, payload, timeout=10):
+    """
+    Helper to send JSON payloads to the Laravel callback endpoints
+    """
+    base_url = Config.LARAVEL_BASE_URL.rstrip('/')
+    url = urljoin(base_url + '/', path.lstrip('/'))
+    
+    headers = {}
+    if Config.LARAVEL_HOST_HEADER:
+        headers['Host'] = Config.LARAVEL_HOST_HEADER
+    
+    response = requests.post(
+        url,
+        json=payload,
+        timeout=timeout,
+        headers=headers,
+        verify=Config.LARAVEL_VERIFY_TLS
+    )
+    response.raise_for_status()
+    return response
+
 
 @celery_app.task(bind=True, name='tasks.generate_erosion_map')
 def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
@@ -33,15 +58,14 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         
         # Notify Laravel that task has started
         try:
-            callback_url = f"http://localhost/api/erosion/task-started"
             callback_data = {
                 'task_id': self.request.id,
                 'area_type': area_type,
                 'area_id': area_id,
                 'year': year
             }
-            requests.post(callback_url, json=callback_data, timeout=10)
-            logger.info("Task started callback sent to Laravel")
+            _post_to_laravel('/api/erosion/task-started', callback_data)
+            logger.info("Task started callback acknowledged by Laravel")
         except Exception as e:
             logger.warning(f"Task started callback failed: {str(e)}")
         
@@ -75,7 +99,8 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         
         logger.info("Starting raster generation...")
         raster_gen = ErosionRasterGenerator()
-        
+        metadata = {}
+
         geotiff_path, statistics, metadata = raster_gen.generate_geotiff(
             area_type, area_id, year, geometry, bbox
         )
@@ -110,7 +135,6 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         
         # Update Laravel database via callback (optional)
         try:
-            callback_url = f"http://localhost/api/erosion/task-complete"
             callback_data = {
                 'task_id': self.request.id,
                 'area_type': area_type,
@@ -121,9 +145,10 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
                 'statistics': statistics,
                 'metadata': metadata
             }
-            requests.post(callback_url, json=callback_data, timeout=10)
+            _post_to_laravel('/api/erosion/task-complete', callback_data, timeout=30)
+            logger.info("Task completion callback acknowledged by Laravel")
         except Exception as e:
-            logger.warning(f"Callback to Laravel failed: {str(e)}")
+            logger.warning(f"Task completion callback failed: {str(e)}")
         
         # Return results
         result = {
@@ -144,27 +169,30 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         
     except Exception as e:
         error_msg = str(e)
+        error_type = type(e).__name__
         logger.error(f"=== Task failed ===")
+        logger.error(f"Error Type: {error_type}")
         logger.error(f"Error: {error_msg}", exc_info=True)
         
-        # Update state to FAILURE
-        self.update_state(
-            state='FAILURE',
-            meta={
-                'error': error_msg,
+        # Notify Laravel that task failed
+        try:
+            callback_data = {
+                'task_id': self.request.id,
                 'area_type': area_type,
                 'area_id': area_id,
-                'year': year
+                'year': year,
+                'error': error_msg,
+                'error_type': error_type,
+                'metadata': metadata
             }
-        )
+            _post_to_laravel('/api/erosion/task-failed', callback_data, timeout=30)
+            logger.info("Task failed callback acknowledged by Laravel")
+        except Exception as callback_error:
+            logger.warning(f"Task failed callback failed: {str(callback_error)}")
         
-        return {
-            'status': 'failed',
-            'error': error_msg,
-            'area_type': area_type,
-            'area_id': area_id,
-            'year': year
-        }
+        # Properly raise the exception for Celery to track
+        # This ensures Celery can properly serialize the exception
+        raise
 
 
 @celery_app.task(name='tasks.test_task')
