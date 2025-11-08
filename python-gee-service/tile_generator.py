@@ -27,7 +27,7 @@ class MapTileGenerator:
             area_type: 'region' or 'district'
             area_id: ID of the area
             year: Year
-            zoom_levels: List of zoom levels to generate (default: [6, 7, 8, 9, 10, 11, 12])
+            zoom_levels: List of zoom levels to generate (default: [6, 7, 8, 9, 10])
             geometry_json: Optional GeoJSON geometry for boundary masking
             
         Returns:
@@ -37,7 +37,7 @@ class MapTileGenerator:
             logger.info(f"Generating map tiles for {area_type} {area_id}, year {year}")
             
             if zoom_levels is None:
-                zoom_levels = [6, 7, 8, 9, 10, 11, 12]
+                zoom_levels = [6, 7, 8, 9, 10]
             
             tiles_dir = self.storage_path / 'tiles' / f'{area_type}_{area_id}' / str(year)
             tiles_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +65,8 @@ class MapTileGenerator:
             # Apply colormap
             logger.info("Applying erosion colormap...")
             colored_data = self.apply_erosion_colormap(data)
+            # Align array orientation with Web Mercator (north at top / y decreasing downwards)
+            colored_data = np.flipud(colored_data)
             
             # Generate tiles for each zoom level
             total_tiles = 0

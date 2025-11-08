@@ -666,7 +666,7 @@ def rainfall_slope():
     Request body:
     {
         "area_geometry": {...},  # GeoJSON geometry
-        "start_year": 2016,
+        "start_year": 1993,
         "end_year": 2024
     }
     """
@@ -728,7 +728,7 @@ def rainfall_cv():
     Request body:
     {
         "area_geometry": {...},  # GeoJSON geometry
-        "start_year": 2016,
+        "start_year": 1993,
         "end_year": 2024
     }
     """
@@ -790,7 +790,7 @@ def rainfall_slope_grid():
     Request body:
     {
         "area_geometry": {...},  # GeoJSON geometry
-        "start_year": 2016,
+        "start_year": 1993,
         "end_year": 2024,
         "grid_size": 50  # Optional, default 50
     }
@@ -855,7 +855,7 @@ def rainfall_cv_grid():
     Request body:
     {
         "area_geometry": {...},  # GeoJSON geometry
-        "start_year": 2016,
+        "start_year": 1993,
         "end_year": 2024,
         "grid_size": 50  # Optional, default 50
     }

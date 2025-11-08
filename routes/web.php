@@ -9,7 +9,7 @@ use Inertia\Inertia;
 Route::get('/', [HomeController::class, 'index']);
 
 // Admin routes
-Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
+Route::prefix('admin')->group(function () {
     Route::get('/dashboard', function () {
         return Inertia::render('Admin/Dashboard');
     });

@@ -1,67 +1,147 @@
+<style scoped>
+.region-select-wrapper,
+.district-select-wrapper {
+  min-height: 2.625rem;
+}
+
+.region-select :deep(.vs__dropdown-toggle),
+.district-select :deep(.vs__dropdown-toggle) {
+  border-color: #d1d5db;
+  border-radius: 0.75rem;
+  min-height: 2.625rem;
+  padding: 0.25rem 0.75rem;
+  background-color: #ffffff;
+  display: flex;
+  align-items: center;
+}
+
+.region-select :deep(.vs__selected),
+.district-select :deep(.vs__selected) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background-color: #e5f0ff;
+  color: #1d4ed8;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+}
+
+.district-select :deep(.vs__selected) {
+  margin-right: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.region-select :deep(.vs__open-indicator),
+.district-select :deep(.vs__open-indicator) {
+  color: #1f2937;
+}
+
+.region-select :deep(.vs__dropdown-menu),
+.district-select :deep(.vs__dropdown-menu) {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.region-select :deep(.vs__search),
+.district-select :deep(.vs__search) {
+  padding: 0.25rem 0;
+}
+</style>
 <template>
   <div class="space-y-4">
     <h3 class="text-lg font-semibold text-gray-900">Area Selection</h3>
 
-    <!-- Region Selector - Always Visible -->
+    <!-- Region Selector -->
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-2">
-        Select Regions (Viloyat)
+        Select Region
       </label>
-      <div class="overflow-y-auto border border-gray-300 rounded-md p-2 space-y-2">
-        <div
-          v-for="region in props.regions"
-          :key="region.id"
-          class="flex items-center space-x-2"
+      <div class="region-select-wrapper">
+        <v-select
+          v-model="selectedRegionOption"
+          :options="regionOptions"
+          label="name_en"
+          :clearable="false"
+          :searchable="true"
+          class="region-select"
+          placeholder="Choose a region"
+          :reduce="option => option"
         >
-          <input
-            type="checkbox"
-            :id="`region-${region.id}`"
-            :value="region.id"
-            v-model="selectedRegionIds"
-            @change="handleRegionSelectionChange"
-            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-          />
-          <label :for="`region-${region.id}`" class="text-sm text-gray-700 cursor-pointer">
-            {{ region.name_en }} ({{ region.name_tj }})
-          </label>
-        </div>
+        <template #selected-option="{ option }">
+          <div v-if="option" class="flex flex-col text-sm leading-snug">
+            <span class="font-medium text-gray-900">{{ option?.name_en || '' }}</span>
+            <span v-if="option?.name_tj" class="text-xs text-gray-500">{{ option.name_tj }}</span>
+          </div>
+        </template>
+        <template #option="{ option }">
+          <div v-if="option" class="flex flex-col text-sm leading-snug">
+            <span class="font-medium text-gray-900">{{ option?.name_en || '' }}</span>
+            <span v-if="option?.name_tj" class="text-xs text-gray-500">{{ option.name_tj }}</span>
+          </div>
+        </template>
+        <template #no-options>
+          <div class="text-sm text-gray-500 py-2 text-center">
+            No regions available.
+          </div>
+        </template>
+      </v-select>
       </div>
     </div>
 
-    <!-- District Selector - Only shown when exactly one region is selected -->
-    <div v-if="selectedRegionIds.length === 1 && filteredDistricts.length > 0">
+    <!-- District Selector -->
+    <div v-if="showDistrictSelector">
       <label class="block text-sm font-medium text-gray-700 mb-2">
-        Select Districts (Nohiya) from {{ getSelectedRegionName() }}
+        Select Districts (Nohiya)
       </label>
-      <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-md p-2 space-y-2">
-        <div
-          v-for="district in filteredDistricts"
-          :key="district.id"
-          class="flex items-center space-x-2"
+      <div class="district-select-wrapper">
+        <v-select
+          v-model="selectedDistrictOptions"
+          :options="filteredDistricts"
+          label="name_en"
+          multiple
+          :close-on-select="false"
+          :clear-on-select="false"
+          :searchable="true"
+          class="district-select"
+          placeholder="Pick districts or leave empty for entire region"
+          :reduce="option => option"
         >
-          <input
-            type="checkbox"
-            :id="`district-${district.id}`"
-            :value="district.id"
-            v-model="selectedDistrictIds"
-            @change="handleDistrictSelectionChange"
-            class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-          />
-          <label :for="`district-${district.id}`" class="text-sm text-gray-700 cursor-pointer">
-            {{ district.name_en }} ({{ district.name_tj }})
-          </label>
-        </div>
+        <template #selected-option="{ option, deselect }">
+          <span
+            v-if="option"
+            class="inline-flex items-center rounded-full bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 mr-1 mb-1"
+          >
+            {{ option?.name_en || '' }}
+            <button
+              type="button"
+              class="ml-1 text-blue-500 hover:text-blue-700 focus:outline-none"
+              @click.stop="deselect(option)"
+            >
+              ×
+            </button>
+          </span>
+        </template>
+        <template #option="{ option }">
+          <div v-if="option" class="flex flex-col text-sm leading-snug">
+            <span class="font-medium text-gray-900">{{ option?.name_en || '' }}</span>
+            <span v-if="option?.name_tj" class="text-xs text-gray-500">{{ option.name_tj }}</span>
+          </div>
+        </template>
+        <template #no-options>
+          <div class="text-sm text-gray-500 py-2 text-center">
+            No districts available for this region.
+          </div>
+        </template>
+      </v-select>
       </div>
+      <p class="text-xs text-gray-500 mt-2">
+        Leave blank to analyze the entire region.
+      </p>
     </div>
 
-    <!-- Quick Actions -->
+    <!-- Actions -->
     <div class="flex space-x-2">
-      <button
-        @click="loadRegions"
-        class="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md hover:bg-blue-700 text-sm"
-      >
-        Refresh Regions
-      </button>
       <button
         @click="clearSelection"
         class="flex-1 bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 text-sm"
@@ -73,7 +153,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import vSelect from 'vue-select'
+import 'vue-select/dist/vue-select.css'
 
 // Props
 const props = defineProps({
@@ -94,146 +176,228 @@ const props = defineProps({
 })
 
 // Emits
-const emit = defineEmits(['update:selectedRegion', 'update:selectedDistrict', 'region-change', 'district-change', 'areas-change'])
+const emit = defineEmits([
+  'update:selectedRegion',
+  'update:selectedDistrict',
+  'region-change',
+  'district-change',
+  'areas-change'
+])
 
-// Reactive data
-const loading = ref(false)
-const selectedRegionIds = ref([])
-const selectedDistrictIds = ref([])
+const countryOption = computed(() => ({
+  id: 0,
+  name_en: 'Tajikistan (Country-wide)',
+  name_tj: 'Тоҷикистон',
+  area_type: 'country'
+}))
 
-// Computed properties
-const selectedAreas = computed(() => {
-  const areas = []
-  
-  // Add selected regions (only if no districts selected)
-  if (selectedDistrictIds.value.length === 0) {
-    selectedRegionIds.value.forEach(regionId => {
-      const region = props.regions.find(r => r.id === regionId)
-      if (region) {
-        areas.push({ ...region, type: 'region' })
-      }
-    })
+const regionOptions = computed(() => {
+  if (!props.regions || props.regions.length === 0) {
+    return [countryOption.value]
   }
-  
-  // Add selected districts (takes priority over regions)
-  selectedDistrictIds.value.forEach(districtId => {
-    const district = props.districts.find(d => d.id === districtId)
-    if (district) {
-      areas.push({ ...district, type: 'district' })
-    }
-  })
-  
-  return areas
+  return [countryOption.value, ...props.regions]
+})
+
+const selectedRegionOption = ref(null)
+const selectedDistrictOptions = ref([])
+const suppressRegionEmit = ref(false)
+const suppressDistrictEmit = ref(false)
+
+watch(selectedRegionOption, (region) => {
+  handleRegionChange(region)
+})
+
+watch(selectedDistrictOptions, () => {
+  handleDistrictChange()
+}, { deep: true })
+
+const showDistrictSelector = computed(() => {
+  return selectedRegionOption.value &&
+    selectedRegionOption.value.id !== countryOption.value.id
 })
 
 const filteredDistricts = computed(() => {
-  // Only show districts when exactly one region is selected
-  if (selectedRegionIds.value.length !== 1) return []
-  
-  return props.districts.filter(district => 
-    district.region_id === selectedRegionIds.value[0]
-  )
+  if (!showDistrictSelector.value) {
+    return []
+  }
+
+  return props.districts.filter(district => district.region_id === selectedRegionOption.value.id)
 })
 
-// Watchers to sync with external changes
+const buildAreasPayload = () => {
+  if (!selectedRegionOption.value) {
+    return []
+  }
+
+  if (selectedRegionOption.value.id === countryOption.value.id) {
+    return [{
+      ...countryOption.value,
+      type: 'country'
+    }]
+  }
+
+  if (selectedDistrictOptions.value.length === 0) {
+    return [{
+      ...selectedRegionOption.value,
+      type: 'region'
+    }]
+  }
+
+  return selectedDistrictOptions.value.map(district => ({
+    ...district,
+    type: 'district'
+  }))
+}
+
+const handleRegionChange = (region) => {
+  const shouldEmit = !suppressRegionEmit.value
+  suppressRegionEmit.value = false
+
+  if (!shouldEmit || !region) {
+    suppressDistrictEmit.value = true
+  }
+
+  selectedDistrictOptions.value = []
+
+  if (!region) {
+    if (shouldEmit) {
+      emit('update:selectedRegion', null)
+      emit('update:selectedDistrict', null)
+      emit('region-change', null)
+      emit('district-change', null)
+      emit('areas-change', [])
+    }
+    return
+  }
+
+  if (shouldEmit) {
+    if (region.id === countryOption.value.id) {
+      emit('update:selectedRegion', { ...countryOption.value })
+      emit('update:selectedDistrict', null)
+      emit('region-change', { ...countryOption.value })
+      emit('district-change', null)
+    } else {
+      emit('update:selectedRegion', region)
+      emit('update:selectedDistrict', null)
+      emit('region-change', region)
+      emit('district-change', null)
+    }
+  }
+}
+
+const handleDistrictChange = () => {
+  const shouldEmit = !suppressDistrictEmit.value
+  suppressDistrictEmit.value = false
+
+  if (!shouldEmit) {
+    return
+  }
+
+  if (selectedDistrictOptions.value.length === 0) {
+    emit('update:selectedDistrict', null)
+    emit('district-change', null)
+  } else if (selectedDistrictOptions.value.length === 1) {
+    emit('update:selectedDistrict', selectedDistrictOptions.value[0])
+    emit('district-change', selectedDistrictOptions.value[0])
+  } else {
+    emit('update:selectedDistrict', null)
+    emit('district-change', null)
+  }
+
+  emit('areas-change', buildAreasPayload())
+}
+
+const clearSelection = () => {
+  selectedRegionOption.value = null
+}
+
 watch(() => props.selectedRegion, (newRegion) => {
-  if (newRegion) {
-    selectedRegionIds.value = [newRegion.id]
-  } else if (!props.selectedDistrict) {
-    selectedRegionIds.value = []
+  if (!newRegion) {
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = null
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+    return
+  }
+
+  if (newRegion.area_type === 'country' || newRegion.id === countryOption.value.id) {
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = countryOption.value
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+  } else {
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = props.regions.find(region => region.id === newRegion.id) || null
   }
 }, { immediate: true })
 
 watch(() => props.selectedDistrict, (newDistrict) => {
-  if (newDistrict) {
-    selectedDistrictIds.value = [newDistrict.id]
-    // Also select the parent region
-    if (newDistrict.region_id) {
-      selectedRegionIds.value = [newDistrict.region_id]
-    }
-  } else if (!props.selectedRegion) {
-    selectedDistrictIds.value = []
-  }
-}, { immediate: true })
-
-// Watch external selectedAreas from map clicks
-watch(() => props.selectedAreas, (newSelectedAreas) => {
-  if (!newSelectedAreas || newSelectedAreas.length === 0) {
-    selectedRegionIds.value = []
-    selectedDistrictIds.value = []
+  if (!newDistrict) {
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
     return
   }
 
-  // Extract region and district IDs from selected areas
-  const regionIds = []
-  const districtIds = []
-  
-  newSelectedAreas.forEach(area => {
-    if (area.type === 'region' || (!area.region_id && !area.district_id && area.id)) {
-      regionIds.push(area.id)
-    } else if (area.type === 'district' || area.region_id) {
-      districtIds.push(area.id)
+  if (!selectedRegionOption.value || selectedRegionOption.value.id !== newDistrict.region_id) {
+    const parentRegion = props.regions.find(region => region.id === newDistrict.region_id)
+    if (parentRegion) {
+      suppressRegionEmit.value = true
+      selectedRegionOption.value = parentRegion
     }
-  })
+  }
 
-  // Update checkbox states to match
-  selectedRegionIds.value = regionIds
-  selectedDistrictIds.value = districtIds
+  const districtOption = props.districts.find(district => district.id === newDistrict.id)
+  suppressDistrictEmit.value = true
+  selectedDistrictOptions.value = districtOption ? [districtOption] : []
+}, { immediate: true })
+
+watch(() => props.selectedAreas, (areas) => {
+  if (!areas || areas.length === 0) {
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = null
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+    return
+  }
+
+  const primaryArea = areas[0]
+
+  if (primaryArea.type === 'country' || primaryArea.area_type === 'country') {
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = countryOption.value
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+  } else if (
+    primaryArea.type === 'region' ||
+    primaryArea.area_type === 'region' ||
+    (!primaryArea.region_id && primaryArea.id)
+  ) {
+    const region = props.regions.find(r => r.id === primaryArea.id)
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = region || null
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+  } else if (
+    primaryArea.type === 'district' ||
+    primaryArea.area_type === 'district' ||
+    primaryArea.region_id
+  ) {
+    const region = props.regions.find(r => r.id === primaryArea.region_id)
+    const districts = props.districts.filter(d =>
+      areas.some(area => area.id === d.id)
+    )
+
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = region || null
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = districts
+  }
 }, { deep: true })
 
-// Methods
-const getSelectedRegionName = () => {
-  if (selectedRegionIds.value.length !== 1) return ''
-  const region = props.regions.find(r => r.id === selectedRegionIds.value[0])
-  return region ? region.name_en : ''
-}
-
-const loadRegions = () => {
-  // Regions are provided via props, no need to reload
-  console.log('Regions are loaded from props')
-}
-
-const handleRegionSelectionChange = () => {
-  console.log('Region selection changed:', selectedRegionIds.value)
-  
-  // Clear districts when changing regions
-  if (selectedRegionIds.value.length !== 1) {
-    selectedDistrictIds.value = []
-  }
-  
-  // Emit the list of selected areas
-  emit('areas-change', selectedAreas.value)
-}
-
-const handleDistrictSelectionChange = () => {
-  console.log('District selection changed:', selectedDistrictIds.value)
-  
-  // Emit the list of selected areas
-  emit('areas-change', selectedAreas.value)
-}
-
-const clearSelection = () => {
-  selectedRegionIds.value = []
-  selectedDistrictIds.value = []
-  
-  emit('update:selectedRegion', null)
-  emit('update:selectedDistrict', null)
-  emit('region-change', null)
-  emit('district-change', null)
-  emit('areas-change', [])
-}
-
-// Auto-select Dushanbe region on component mount
-onMounted(async () => {
-  // Find Dushanbe region by name
-  const dushanbeRegion = props.regions.find(r => r.name_en === 'Dushanbe')
-  if (dushanbeRegion && selectedRegionIds.value.length === 0) {
-    selectedRegionIds.value = [dushanbeRegion.id]
-    // Wait for computed property to update
-    await nextTick()
-    // Emit the selection
-    emit('areas-change', selectedAreas.value)
-    console.log('Auto-selected Dushanbe region:', selectedAreas.value)
+onMounted(() => {
+  if (!selectedRegionOption.value) {
+    selectedRegionOption.value = countryOption.value
   }
 })
 </script>
+

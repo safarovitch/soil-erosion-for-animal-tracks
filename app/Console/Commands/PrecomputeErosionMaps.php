@@ -16,7 +16,7 @@ class PrecomputeErosionMaps extends Command
      * @var string
      */
     protected $signature = 'erosion:precompute-all 
-                            {--years=1993,2025 : Year range (start,end)}
+                            {--years=1993,current : Year range (start,end|current)}
                             {--type=all : Type to precompute: region, district, or all}
                             {--force : Recompute existing maps}';
 
@@ -38,8 +38,34 @@ class PrecomputeErosionMaps extends Command
         $this->newLine();
 
         // Parse year range
-        $years = explode(',', $this->option('years'));
-        $yearRange = range((int)$years[0], (int)($years[1] ?? $years[0]));
+        $yearOption = $this->option('years');
+        $years = array_map('trim', explode(',', $yearOption));
+
+        $minYear = (int) config('earthengine.defaults.start_year', 1993);
+        $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
+
+        $startYearInput = $years[0] ?? $minYear;
+        $endYearInput = $years[1] ?? $startYearInput;
+
+        $startYear = strtolower((string) $startYearInput) === 'current'
+            ? $maxYear
+            : (int) $startYearInput;
+
+        $endYear = strtolower((string) $endYearInput) === 'current'
+            ? $maxYear
+            : (int) $endYearInput;
+
+        if ($startYear < $minYear || $endYear > $maxYear) {
+            $this->error("Years must be between {$minYear} and {$maxYear}");
+            return 1;
+        }
+
+        if ($startYear > $endYear) {
+            $this->error('Start year cannot be greater than end year.');
+            return 1;
+        }
+
+        $yearRange = range($startYear, $endYear);
         $type = $this->option('type');
         $force = $this->option('force');
 

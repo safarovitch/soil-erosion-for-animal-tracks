@@ -8,7 +8,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import axios from 'axios'
 import { Map, View } from 'ol'
 import { Tile as TileLayer, Vector as VectorLayer, Image as ImageLayer } from 'ol/layer'
@@ -23,6 +23,7 @@ import { easeOut, inAndOut } from 'ol/easing'
 import { Polygon, Point, LineString } from 'ol/geom'
 import { ScaleLine, defaults as defaultControls } from 'ol/control'
 import 'ol/ol.css'
+import { DEFAULT_YEAR_PERIOD } from '@/constants/yearPeriods.js'
 
 // Props
 const props = defineProps({
@@ -31,8 +32,15 @@ const props = defineProps({
   selectedRegion: Object,
   selectedDistrict: Object,
   selectedAreas: Array,
-  selectedYear: Number,
+  selectedPeriod: {
+    type: Object,
+    default: null,
+  },
   visibleLayers: Array,
+  analysisTrigger: {
+    type: Number,
+    default: 0,
+  },
 })
 
 // Emits
@@ -56,8 +64,12 @@ const baseLayer = ref(null) // Reference to base layer
 const labelsLayer = ref(null) // Reference to labels layer
 const tajikistanBoundaryLayer = ref(null) // Boundary layer for Tajikistan
 const tajikistanBoundary = ref(null) // Tajikistan boundary geometry
+const tajikistanBoundaryFeatureCollection = ref(null) // Store full boundary GeoJSON for country highlight
 const currentZoom = ref(8) // Current zoom level for display
 const scaleLine = ref(null) // Scale line control
+const selectedPeriod = computed(() => props.selectedPeriod || DEFAULT_YEAR_PERIOD)
+const periodStartYear = computed(() => selectedPeriod.value.startYear)
+const periodEndYear = computed(() => selectedPeriod.value.endYear)
 
 // Map configuration
 const mapConfig = {
@@ -158,8 +170,7 @@ const initMap = () => {
   emit('map-ready', map.value)
 
   // Update map layers when map becomes ready
-  console.log('Updating map layers after map is ready...')
-  updateMapLayers()
+  console.log('Map ready. Awaiting apply trigger for layer updates.')
 
   // Add click handler for statistics and area selection
   map.value.on('click', handleMapClick)
@@ -750,8 +761,6 @@ const updateRegionLayer = (region) => {
       easing: easeOut
     })
 
-    // Load detailed erosion data for this region
-    loadDetailedErosionData(region)
   } catch (error) {
     console.error('Error updating region layer:', error)
   }
@@ -820,8 +829,6 @@ const updateDistrictLayer = (district) => {
       easing: easeOut
     })
 
-    // Load detailed erosion data for this district
-    loadDetailedErosionData(district)
   } catch (error) {
     console.error('Error updating district layer:', error)
   }
@@ -873,12 +880,23 @@ const loadDetailedErosionData = async (area) => {
 
     const areaType = area.region_id ? 'district' : 'region'
     const areaId = area.id
+    const endYear = periodEndYear.value || new Date().getFullYear()
+
+    if (endYear < 2015) {
+      emit('layer-warning', {
+        type: 'info',
+        title: 'Tiles Unavailable',
+        message: `Precomputed tiles are only available from 2015 onwards.`,
+        details: `Selected period ${periodStartYear.value} - ${endYear} predates available tile data.`,
+      })
+      return
+    }
 
     // Ask backend for availability (this queues generation when needed)
     const availabilityResponse = await axios.post('/api/erosion/check-availability', {
       area_type: areaType,
       area_id: areaId,
-      year: props.selectedYear || 2024
+      year: endYear
     })
 
     const availability = availabilityResponse.data || {}
@@ -1207,14 +1225,9 @@ const updateMapLayers = async () => {
                 const requestData = {
                   area_type: areaType,
                   area_id: areaId,
-                  year: props.selectedYear || 2024
-                }
-                
-                // Add year range for rainfall layers
-                if (layerId === 'rainfall_slope' || layerId === 'rainfall_cv') {
-                  const selectedYear = props.selectedYear || 2024
-                  requestData.start_year = Math.max(2016, selectedYear - 5)
-                  requestData.end_year = selectedYear
+                  year: periodEndYear.value,
+                  start_year: periodStartYear.value,
+                  end_year: periodEndYear.value,
                 }
                 
                 const layer = await fetchAndRenderLayer(layerId, layerDef, area, areaType, opacity)
@@ -1321,15 +1334,9 @@ const fetchAndRenderLayer = async (layerId, layerDef, area, areaType, opacity) =
     const requestData = {
       area_type: areaType,
       area_id: area.id,
-      year: props.selectedYear || 2024
-    }
-    
-    // Add year range for rainfall layers
-    if (layerId === 'rainfall_slope' || layerId === 'rainfall_cv') {
-      const selectedYear = props.selectedYear || 2024
-      // Ensure start_year is at least 2016 (minimum allowed year)
-      requestData.start_year = Math.max(2016, selectedYear - 5)
-      requestData.end_year = selectedYear
+      year: periodEndYear.value,
+      start_year: periodStartYear.value,
+      end_year: periodEndYear.value,
     }
     
     const response = await axios.post(layerDef.apiEndpoint, requestData)
@@ -1433,14 +1440,9 @@ const createVectorLayerFromData = async (layerId, layerDef, area, layerData, opa
           const requestData = {
             area_type: areaType,
             area_id: areaId,
-            year: props.selectedYear || 2024
-          }
-          
-          // Add year range for rainfall layers
-          if (layerId === 'rainfall_slope' || layerId === 'rainfall_cv') {
-            const selectedYear = props.selectedYear || 2024
-            requestData.start_year = Math.max(2016, selectedYear - 5)
-            requestData.end_year = selectedYear
+                  year: periodEndYear.value,
+                  start_year: periodStartYear.value,
+                  end_year: periodEndYear.value,
           }
           
           console.log(`Fetching data for ${areaItem.name_en}:`, requestData)
@@ -1786,21 +1788,22 @@ watch(() => props.selectedDistrict, (newDistrict) => {
 
 watch(() => props.visibleLayers, (newLayers) => {
   console.log('Visible layers changed:', newLayers)
-  if (map.value) {
-    console.log('Updating map layers...')
-    updateMapLayers()
-  } else {
+  if (!map.value) {
     console.log('Map not ready yet')
   }
 }, { immediate: true, deep: true })
 
-// Watch for selection changes to update overlay layers
-watch(() => [props.selectedRegion, props.selectedDistrict], () => {
-  console.log('Selection changed, updating overlay layers...')
-  if (map.value) {
+watch(() => props.analysisTrigger, (trigger, previous) => {
+  if (!map.value) {
+    console.log('Analysis trigger changed but map not ready yet')
+    return
+  }
+
+  if (typeof trigger === 'number' && trigger > 0) {
+    console.log('Analysis trigger received, refreshing map layers')
     updateMapLayers()
   }
-}, { deep: true })
+})
 
 // Load TopoJSON data
 const loadTopoJSONLayer = async (topoJsonUrl, layerName = 'tajikistan') => {
@@ -2070,6 +2073,10 @@ const loadTajikistanBoundary = async () => {
 
       // Store the boundary extent for checking
       tajikistanBoundary.value = boundaryPolygon.getExtent()
+      tajikistanBoundaryFeatureCollection.value = geoJsonFormat.writeFeaturesObject(features, {
+        featureProjection: 'EPSG:3857',
+        dataProjection: 'EPSG:4326'
+      })
       
       // Create a boundary layer with subtle outline
       const boundarySource = new VectorSource({
@@ -2351,6 +2358,49 @@ const highlightSelectedAreas = (selectedAreas) => {
   
   for (const area of selectedAreas) {
     try {
+      if (area.type === 'country' || area.area_type === 'country') {
+        const geojsonFormat = new GeoJSON()
+        let countryFeatures = []
+
+        if (tajikistanBoundaryFeatureCollection.value) {
+          countryFeatures = geojsonFormat.readFeatures(tajikistanBoundaryFeatureCollection.value, {
+            dataProjection: 'EPSG:4326',
+            featureProjection: 'EPSG:3857',
+          })
+        } else if (tajikistanBoundaryLayer.value) {
+          const source = tajikistanBoundaryLayer.value.getSource()
+          countryFeatures = source ? source.getFeatures().map(feature => feature.clone()) : []
+        } else if (topoJsonLayer.value) {
+          const source = topoJsonLayer.value.getSource()
+          countryFeatures = source ? source.getFeatures().map(feature => feature.clone()) : []
+        }
+
+        if (countryFeatures.length > 0) {
+          countryFeatures.forEach(feature => {
+            feature.setProperties({
+              areaId: area.id ?? 0,
+              areaName: area.name_en || area.name || 'Tajikistan',
+              areaType: 'country',
+              isHighlighted: true
+            })
+
+            feature.setStyle(new Style({
+              stroke: new Stroke({
+                color: '#2563eb',
+                width: 3
+              }),
+              fill: new Fill({
+                color: 'rgba(37, 99, 235, 0.1)'
+              })
+            }))
+          })
+
+          highlightFeatures.push(...countryFeatures)
+          console.log(`Highlighted country boundary with ${countryFeatures.length} features`)
+          continue
+        }
+      }
+
       // Check if area has geometry data
       if (!area.geometry) {
         console.warn(`Area ${area.name_en} has no geometry data, creating fallback highlight`)
@@ -2547,7 +2597,8 @@ defineExpose({
   animateAllVisibleBorders,
   testVisualization,
   highlightSelectedAreas,
-  clearAreaHighlights
+  clearAreaHighlights,
+  getCountryBoundary: () => tajikistanBoundaryFeatureCollection.value
 })
 
 // Lifecycle

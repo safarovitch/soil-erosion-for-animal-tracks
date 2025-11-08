@@ -65,11 +65,8 @@
 
                     <!-- Time Series Slider -->
                     <TimeSeriesSlider
-                        v-model:year="selectedYear"
-                        :start-year="2016"
-                        :end-year="2024"
-                        :selected-area="selectedArea"
-                        @year-change="handleYearChange"
+                        v-model:period="selectedPeriod"
+                        @period-change="handlePeriodChange"
                         class="mt-6"
                     />
 
@@ -85,14 +82,25 @@
 
                     <!-- Drawing Tools -->
 
-                    <!-- Test Button -->
-                    <div class="mt-4">
+                    <div class="mt-8 space-y-2">
                         <button
-                            @click="testVisualization"
-                            class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                            @click="applySelection"
+                            :disabled="!canApply"
+                            class="w-full px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors"
+                            :class="[
+                                canApply
+                                    ? 'bg-blue-600 hover:bg-blue-700'
+                                    : 'bg-gray-400 cursor-not-allowed'
+                            ]"
                         >
-                            Test Visualization
+                            Apply Selection
                         </button>
+                        <p
+                            v-if="needsApply && canApply"
+                            class="text-xs text-amber-600 bg-amber-100 border border-amber-200 rounded-md px-3 py-2"
+                        >
+                            Changes pending. Click “Apply Selection” to update statistics and layers.
+                        </p>
                     </div>
                 </div>
 
@@ -169,8 +177,9 @@
                         :selected-region="selectedRegion"
                         :selected-district="selectedDistrict"
                         :selected-areas="selectedAreas"
-                        :selected-year="selectedYear"
+                        :selected-period="selectedPeriod"
                         :visible-layers="visibleLayers"
+                        :analysis-trigger="analysisTrigger"
                         @map-ready="handleMapReady"
                         @statistics-updated="handleStatisticsUpdated"
                         @district-clicked="handleDistrictClicked"
@@ -438,6 +447,7 @@ import MapLegend from "@/Components/Map/MapLegend.vue";
 import ProgressBar from "@/Components/UI/ProgressBar.vue";
 import ToastNotification from "@/Components/UI/ToastNotification.vue";
 import { GeoJSONService } from "@/Services/GeoJSONService.js";
+import { DEFAULT_YEAR_PERIOD } from "@/constants/yearPeriods.js";
 
 // Props
 const props = defineProps({
@@ -449,7 +459,11 @@ const props = defineProps({
 // Reactive data
 const selectedRegion = ref(null);
 const selectedDistrict = ref(null);
-const selectedYear = ref(2020);
+const selectedPeriod = ref({ ...DEFAULT_YEAR_PERIOD });
+const currentPeriod = computed(() => selectedPeriod.value || DEFAULT_YEAR_PERIOD);
+const currentStartYear = computed(() => currentPeriod.value.startYear);
+const currentEndYear = computed(() => currentPeriod.value.endYear);
+const currentPeriodLabel = computed(() => currentPeriod.value.label);
 const selectedArea = ref(null);
 const selectedAreas = ref([]); // Multiple selected areas
 const visibleLayers = ref([]); // Start with no layers selected (country-wide default)
@@ -463,6 +477,8 @@ const progress = ref(0);
 const loadingMessage = ref("");
 const showLogin = ref(false);
 const loginLoading = ref(false);
+const analysisTrigger = ref(0);
+const needsApply = ref(true);
 
 // Toast notification
 const toast = reactive({
@@ -496,6 +512,8 @@ const filteredDistricts = computed(() => {
     );
 });
 
+const canApply = computed(() => selectedAreas.value.length > 0 && !loading.value);
+
 // Login form
 const loginForm = reactive({
     email: "",
@@ -509,12 +527,6 @@ const availableLayers = ref([
         name: "Soil Erosion Hazard",
         description: "Annual soil loss rate (A = R×K×LS×C×P)",
         metadata: { unit: "t/ha/yr" },
-    },
-    {
-        id: "rainfall_slope",
-        name: "Rainfall Trend",
-        description: "Temporal change in rainfall (mm/year per year)",
-        metadata: { colorScheme: "diverging" },
     },
     {
         id: "rainfall_cv",
@@ -552,21 +564,6 @@ const availableLayers = ref([
         description: "Support practice factor",
         metadata: { unit: "dimensionless", range: "0-1" },
     },
-    {
-        id: "bare_soil",
-        name: "Bare Soil Frequency",
-        description: "Frequency of bare soil exposure",
-    },
-    {
-        id: "sustainability",
-        name: "Sustainability Factor",
-        description: "Land management sustainability",
-    },
-    {
-        id: "custom",
-        name: "Custom Datasets",
-        description: "User uploaded data",
-    },
 ]);
 
 // Computed properties
@@ -581,6 +578,62 @@ const showToast = (type, title, message, details = "") => {
     toast.message = message;
     toast.details = details;
     toast.show = true;
+};
+
+const markAnalysisDirty = () => {
+    needsApply.value = true;
+};
+
+const applySelection = async () => {
+    let areasToApply = selectedAreas.value;
+
+    if (mapView.value && selectedAreas.value.length > 0) {
+        const countryBoundary = mapView.value.getCountryBoundary?.();
+        if (countryBoundary) {
+            let changed = false;
+            areasToApply = selectedAreas.value.map((area) => {
+                if (
+                    (area.area_type === "country" || area.type === "country") &&
+                    !area.geometry
+                ) {
+                    changed = true;
+                    return {
+                        ...area,
+                        geometry: countryBoundary,
+                    };
+                }
+                return area;
+            });
+
+            if (changed) {
+                selectedAreas.value = areasToApply;
+            }
+        }
+    }
+
+    const primaryArea = areasToApply[0] || null;
+    selectedArea.value = primaryArea || null;
+
+    analysisTrigger.value += 1;
+    needsApply.value = false;
+
+    if (primaryArea && !bottomPanelVisible.value) {
+        bottomPanelVisible.value = true;
+    }
+
+    if (primaryArea) {
+        await loadAreaStatistics(primaryArea);
+    } else {
+        statistics.value = null;
+    }
+
+    if (mapView.value) {
+        if (selectedAreas.value.length > 0) {
+            mapView.value.highlightSelectedAreas(selectedAreas.value);
+        } else {
+            mapView.value.clearAreaHighlights();
+        }
+    }
 };
 
 const handleMapReady = (map) => {
@@ -677,8 +730,17 @@ const loadAreaStatistics = async (area) => {
         loadingMessage.value = "Computing erosion factors...";
 
         // Determine area type
-        const areaType = area.region_id ? "district" : "region";
-        const areaId = area.id;
+        let areaType;
+        let areaId = area.id;
+
+        if (area.area_type === "country" || area.id === 0) {
+            areaType = "country";
+            areaId = 0;
+        } else if (area.region_id) {
+            areaType = "district";
+        } else {
+            areaType = "region";
+        }
 
         // Request RUSLE computation
         const response = await fetch("/api/erosion/compute", {
@@ -690,7 +752,9 @@ const loadAreaStatistics = async (area) => {
             body: JSON.stringify({
                 area_type: areaType,
                 area_id: areaId,
-                year: selectedYear.value,
+                year: currentEndYear.value,
+                start_year: currentStartYear.value,
+                end_year: currentEndYear.value,
                 period: "annual",
             }),
         });
@@ -727,9 +791,8 @@ const loadAreaStatistics = async (area) => {
                         body: JSON.stringify({
                             area_type: areaType,
                             area_id: areaId,
-                            year: selectedYear.value,
-                            start_year: selectedYear.value - 5,
-                            end_year: selectedYear.value,
+                            start_year: currentStartYear.value,
+                            end_year: currentEndYear.value,
                         }),
                     });
 
@@ -748,9 +811,8 @@ const loadAreaStatistics = async (area) => {
                         body: JSON.stringify({
                             area_type: areaType,
                             area_id: areaId,
-                            year: selectedYear.value,
-                            start_year: selectedYear.value - 10,
-                            end_year: selectedYear.value,
+                            start_year: currentStartYear.value,
+                            end_year: currentEndYear.value,
                         }),
                     });
 
@@ -813,61 +875,20 @@ const loadAreaStatistics = async (area) => {
 };
 
 const handleRegionChange = (region) => {
+    selectedRegion.value = region;
     selectedDistrict.value = null;
     selectedArea.value = region;
-    
-    // Update selected areas for consistency
-    if (region) {
-        selectedAreas.value = [region];
-    } else {
-        selectedAreas.value = [];
-    }
+    markAnalysisDirty();
 
-    // Load statistics for selected area
-    if (region) {
-        loadAreaStatistics(region);
-    } else {
-        statistics.value = null;
-    }
-
-    // Only load data if a layer is active
-    if (mapView.value && visibleLayers.value.length > 0) {
-        visibleLayers.value.forEach(layerId => {
-            mapView.value.updateMapLayers(layerId);
-        });
-    }
-
-    // Reset district highlighting when region is selected
-    if (mapView.value) {
+    if (mapView.value && region?.area_type !== 'country') {
         mapView.value.resetDistrictHighlighting();
     }
 };
 
 const handleDistrictChange = (district) => {
     selectedArea.value = district;
-    
-    // Update selected areas for consistency
-    if (district) {
-        selectedAreas.value = [district];
-    } else {
-        selectedAreas.value = [];
-    }
+    markAnalysisDirty();
 
-    // Load statistics for selected area
-    if (district) {
-        loadAreaStatistics(district);
-    } else {
-        statistics.value = null;
-    }
-
-    // Only load data if a layer is active
-    if (mapView.value && visibleLayers.value.length > 0) {
-        visibleLayers.value.forEach(layerId => {
-            mapView.value.updateMapLayers(layerId);
-        });
-    }
-
-    // Highlight the selected district on the map
     if (mapView.value && district) {
         mapView.value.highlightDistrict(district.name_en || district.name);
     }
@@ -893,24 +914,15 @@ const handleDistrictClicked = (districtData) => {
         // Update selected areas for highlighting
         selectedAreas.value = [district];
 
+        markAnalysisDirty();
+
         // Show bottom panel if hidden
         if (!bottomPanelVisible.value) {
             bottomPanelVisible.value = true;
         }
 
-        // Load statistics for clicked district
-        loadAreaStatistics(district);
-
-        // Only load data if a layer is active
-        if (mapView.value && visibleLayers.value.length > 0) {
-            visibleLayers.value.forEach(layerId => {
-                mapView.value.updateMapLayers(layerId);
-            });
-        } else {
-            // Only highlight the selected district if no data layers are active
-            if (mapView.value) {
-                mapView.value.highlightSelectedAreas([district]);
-            }
+        if (mapView.value) {
+            mapView.value.highlightSelectedAreas([district]);
         }
     }
 };
@@ -934,28 +946,15 @@ const handleRegionClicked = (regionData) => {
         // Update selected areas for highlighting
         selectedAreas.value = [region];
 
+        markAnalysisDirty();
+
         // Show bottom panel if hidden
         if (!bottomPanelVisible.value) {
             bottomPanelVisible.value = true;
         }
 
-        // Load statistics for clicked region
-        loadAreaStatistics(region);
-
-        // Only load data if a layer is active
-        if (mapView.value && visibleLayers.value.length > 0) {
-            visibleLayers.value.forEach(layerId => {
-                mapView.value.updateMapLayers(layerId);
-            });
-        } else {
-            // Only highlight the selected region if no data layers are active
-            if (mapView.value) {
-                mapView.value.highlightSelectedAreas([region]);
-            }
-        }
-
-        // Update the map view to highlight the selected region
         if (mapView.value) {
+            mapView.value.highlightSelectedAreas([region]);
             mapView.value.updateRegionLayer(region);
         }
     }
@@ -1017,23 +1016,16 @@ const handleAreaToggleSelection = (areaData) => {
         // Update selectedArea to first selected for backward compatibility
         if (selectedAreas.value.length > 0) {
             selectedArea.value = selectedAreas.value[0];
-            // Load statistics for the first selected area
-            loadAreaStatistics(selectedArea.value);
         } else {
             selectedArea.value = null;
             statistics.value = null;
         }
 
+        markAnalysisDirty();
+
         // Highlight selected areas
         if (mapView.value) {
             mapView.value.highlightSelectedAreas(selectedAreas.value);
-        }
-
-        // Load data if a layer is active
-        if (mapView.value && visibleLayers.value.length > 0) {
-            visibleLayers.value.forEach(layerId => {
-                mapView.value.updateMapLayers(layerId);
-            });
         }
     }
 };
@@ -1069,18 +1061,11 @@ const handleLayerWarning = (warningData) => {
     );
 };
 
-const handleYearChange = (year) => {
-    // Reload all active layers for the new year
-    if (mapView.value && visibleLayers.value.length > 0) {
-        visibleLayers.value.forEach(layerId => {
-            mapView.value.updateMapLayers(layerId);
-        });
+const handlePeriodChange = (period) => {
+    if (period) {
+        selectedPeriod.value = { ...period };
     }
-
-    // Reload statistics for selected area if one is selected
-    if (selectedArea.value) {
-        loadAreaStatistics(selectedArea.value);
-    }
+    markAnalysisDirty();
 };
 
 const handleLayerToggle = (layerId, visible) => {
@@ -1089,37 +1074,12 @@ const handleLayerToggle = (layerId, visible) => {
         if (!visibleLayers.value.includes(layerId)) {
             visibleLayers.value = [...visibleLayers.value, layerId];
         }
-
-        // If no area is selected, automatically select all available areas
-        if (!selectedArea.value && selectedAreas.value.length === 0) {
-            console.log("No area selected, auto-selecting all available areas");
-            selectAllAvailableAreas();
-        }
-
-        // Update map layers properly through MapView component
-        if (mapView.value) {
-            mapView.value.updateMapLayers(layerId);
-        }
     } else {
         // Remove the layer from visible layers
         visibleLayers.value = visibleLayers.value.filter(id => id !== layerId);
-
-        // Remove the layer from the map
-        if (mapView.value) {
-            mapView.value.removeLayer(layerId);
-        }
-
-        // Clear all layer colors from the map if no layers are active
-        if (visibleLayers.value.length === 0 && mapView.value) {
-            mapView.value.clearAllLayerColors();
-            
-            // Restore area highlights when no layers are active
-            if (selectedAreas.value.length > 0) {
-                console.log("Restoring area highlights since no layers are active");
-                mapView.value.highlightSelectedAreas(selectedAreas.value);
-            }
-        }
     }
+
+    markAnalysisDirty();
 };
 
 const handleLabelsToggle = (visible) => {
@@ -1128,13 +1088,6 @@ const handleLabelsToggle = (visible) => {
     // Toggle labels on the map
     if (mapView.value) {
         mapView.value.toggleLabels(visible);
-    }
-};
-
-const testVisualization = () => {
-    console.log("Testing visualization from Map.vue");
-    if (mapView.value) {
-        mapView.value.testVisualization();
     }
 };
 
@@ -1173,6 +1126,8 @@ const selectAllAvailableAreas = () => {
 
     console.log(`Auto-selected ${allAreas.length} total areas`);
 
+    markAnalysisDirty();
+
     // Highlight all selected areas on the map
     if (mapView.value) {
         mapView.value.highlightSelectedAreas(allAreas);
@@ -1185,8 +1140,6 @@ const handleAreasChange = (newSelectedAreas) => {
     // Update selectedArea to the first area for backward compatibility
     if (newSelectedAreas.length > 0) {
         selectedArea.value = newSelectedAreas[0];
-        // Load statistics for the first selected area
-        loadAreaStatistics(selectedArea.value);
     } else {
         selectedArea.value = null;
         statistics.value = null;
@@ -1194,16 +1147,14 @@ const handleAreasChange = (newSelectedAreas) => {
 
     // Store all selected areas
     selectedAreas.value = newSelectedAreas;
+    markAnalysisDirty();
 
-    // Only load data if a layer is active
-    if (mapView.value && visibleLayers.value.length > 0) {
-        visibleLayers.value.forEach(layerId => {
-            mapView.value.updateMapLayers(layerId);
-        });
-    } else {
-        // Only highlight selected areas if no data layers are active
-        if (mapView.value) {
+    // Highlight selected areas immediately for visual feedback
+    if (mapView.value) {
+        if (newSelectedAreas.length > 0) {
             mapView.value.highlightSelectedAreas(newSelectedAreas);
+        } else {
+            mapView.value.clearAreaHighlights();
         }
     }
 };
@@ -1282,7 +1233,9 @@ const loadErosionData = async () => {
                 requestBody = {
                     area_type: "country",
                     area_id: 0,
-                    year: selectedYear.value,
+                    year: currentEndYear.value,
+                    start_year: currentStartYear.value,
+                    end_year: currentEndYear.value,
                     period: "annual",
                 };
             } else {
@@ -1292,7 +1245,9 @@ const loadErosionData = async () => {
                         ? "district"
                         : "region",
                     area_id: selectedArea.value.id,
-                    year: selectedYear.value,
+                    year: currentEndYear.value,
+                    start_year: currentStartYear.value,
+                    end_year: currentEndYear.value,
                     period: "annual",
                 };
             }
@@ -1301,7 +1256,9 @@ const loadErosionData = async () => {
             requestBody = {
                 area_type: "country",
                 area_id: 0,
-                year: selectedYear.value,
+                year: currentEndYear.value,
+                start_year: currentStartYear.value,
+                end_year: currentEndYear.value,
                 period: "annual",
             };
         }
@@ -1437,7 +1394,9 @@ const analyzeGeometry = async (geometry) => {
             },
             body: JSON.stringify({
                 geometry,
-                year: selectedYear.value,
+                year: currentEndYear.value,
+                start_year: currentStartYear.value,
+                end_year: currentEndYear.value,
             }),
         });
 
@@ -1594,8 +1553,8 @@ const exportMapAsPNG = () => {
                 "Country-wide";
             mapContext.fillText(`Area: ${areaName}`, 20, 55);
             mapContext.fillText(
-                `Year: ${
-                    selectedYear.value
+                `Period: ${
+                    currentPeriodLabel.value
                 } | Date: ${new Date().toLocaleDateString()}`,
                 20,
                 75
@@ -1607,7 +1566,7 @@ const exportMapAsPNG = () => {
                 link.href = URL.createObjectURL(blob);
                 link.download = `rusle-map-${
                     selectedArea.value?.name_en || "tajikistan"
-                }-${selectedYear.value}-${
+                }-${currentPeriodLabel.value.replace(/\s+/g, "-")}-${
                     new Date().toISOString().split("T")[0]
                 }.png`;
                 document.body.appendChild(link);
@@ -1655,7 +1614,7 @@ const exportStatisticsCSV = () => {
         "Type",
         selectedArea.value?.region_id ? "District" : "Region",
     ]);
-    csvData.push(["Year", selectedYear.value]);
+    csvData.push(["Period", currentPeriodLabel.value]);
     csvData.push([]);
 
     // Erosion Statistics
@@ -1764,7 +1723,7 @@ const exportStatisticsCSV = () => {
     link.setAttribute(
         "download",
         `rusle-statistics-${selectedArea.value?.name_en || "tajikistan"}-${
-            selectedYear.value
+            currentPeriodLabel.value.replace(/\s+/g, "-")
         }-${new Date().toISOString().split("T")[0]}.csv`
     );
     link.style.visibility = "hidden";
@@ -1881,7 +1840,9 @@ const loadCountryWideData = async () => {
                     body: JSON.stringify({
                         area_type: "district",
                         area_id: district.id,
-                        year: selectedYear.value,
+                        year: currentEndYear.value,
+                        start_year: currentStartYear.value,
+                        end_year: currentEndYear.value,
                         period: "annual",
                     }),
                 });

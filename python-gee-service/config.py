@@ -2,6 +2,7 @@
 Configuration management for GEE Service
 """
 import os
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,8 +24,13 @@ class Config:
     GEE_PROJECT_ID = os.getenv('GEE_PROJECT_ID')
     
     # RUSLE configuration
-    RUSLE_START_YEAR = int(os.getenv('RUSLE_START_YEAR', 2016))
-    RUSLE_END_YEAR = int(os.getenv('RUSLE_END_YEAR', 2024))
+    RUSLE_START_YEAR = 1993
+    _rusle_end_year_raw = os.getenv('RUSLE_END_YEAR')
+    try:
+        _rusle_end_year = int(_rusle_end_year_raw) if _rusle_end_year_raw else datetime.now().year
+    except (TypeError, ValueError):
+        _rusle_end_year = datetime.now().year
+    RUSLE_END_YEAR = max(RUSLE_START_YEAR, _rusle_end_year)
     DEFAULT_GRID_SIZE = int(os.getenv('DEFAULT_GRID_SIZE', 10))
     MAX_GRID_SIZE = int(os.getenv('MAX_GRID_SIZE', 500))
     

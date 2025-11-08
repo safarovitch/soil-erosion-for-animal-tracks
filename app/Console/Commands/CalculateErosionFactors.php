@@ -70,9 +70,12 @@ class CalculateErosionFactors extends Command
             return 1;
         }
 
-        $year = (int)$year;
-        if ($year < 1993 || $year > 2025) {
-            $this->error("Year must be between 1993 and 2025");
+        $year = (int) $year;
+        $minYear = (int) config('earthengine.defaults.start_year', 1993);
+        $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
+
+        if ($year < $minYear || $year > $maxYear) {
+            $this->error("Year must be between {$minYear} and {$maxYear}");
             return 1;
         }
 

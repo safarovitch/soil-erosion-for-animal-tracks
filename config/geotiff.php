@@ -39,7 +39,7 @@ return [
     */
 
     'processing' => [
-        'tile_zoom_levels' => '0-18',
+        'tile_zoom_levels' => '0-12',
         'tile_format' => 'png',
         'compression' => 'LZW',
         'block_size' => 512,

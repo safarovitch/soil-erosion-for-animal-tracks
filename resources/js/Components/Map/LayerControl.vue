@@ -59,24 +59,6 @@
       </div>
     </div>
 
-    <!-- Quick Actions -->
-    <div class="border-t pt-4">
-      <div class="flex space-x-2">
-        <button
-          @click="showAllLayers"
-          class="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md hover:bg-blue-700 text-sm"
-        >
-          Show All
-        </button>
-        <button
-          @click="hideAllLayers"
-          class="flex-1 bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 text-sm"
-        >
-          Hide All
-        </button>
-      </div>
-    </div>
-
     <!-- Layer Info Modal -->
     <div
       v-if="selectedLayerInfo"
@@ -162,25 +144,6 @@ const toggleLayer = (layerId, visible) => {
 
 const toggleLabels = (visible) => {
   emit('labels-toggle', visible)
-}
-
-const showAllLayers = () => {
-  // Enable all available layers for comparison
-  if (props.availableLayers && props.availableLayers.length > 0) {
-    props.availableLayers.forEach(layer => {
-      if (!props.visibleLayers || !props.visibleLayers.includes(layer.id)) {
-        emit('layer-toggle', layer.id, true)
-      }
-    })
-  }
-}
-
-const hideAllLayers = () => {
-  if (props.visibleLayers) {
-    props.visibleLayers.forEach(layerId => {
-      emit('layer-toggle', layerId, false)
-    })
-  }
 }
 
 const showLayerInfo = (layer) => {

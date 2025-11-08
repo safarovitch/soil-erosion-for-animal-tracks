@@ -5,12 +5,15 @@ import {
     ref,
     computed
 } from 'vue'
+import {
+    DEFAULT_YEAR_PERIOD
+} from '@/constants/yearPeriods.js'
 
 export const useMapStore = defineStore('map', () => {
     // State
     const selectedRegion = ref(null)
     const selectedDistrict = ref(null)
-    const selectedYear = ref(new Date().getFullYear())
+    const selectedPeriod = ref({ ...DEFAULT_YEAR_PERIOD })
     const visibleLayers = ref([])
     const drawingMode = ref(null)
     const mapInstance = ref(null)
@@ -32,8 +35,8 @@ export const useMapStore = defineStore('map', () => {
         selectedDistrict.value = district
     }
 
-    const setSelectedYear = (year) => {
-        selectedYear.value = year
+    const setSelectedPeriod = (period) => {
+        selectedPeriod.value = { ...(period || DEFAULT_YEAR_PERIOD) }
     }
 
     const toggleLayer = (layerName) => {
@@ -71,14 +74,14 @@ export const useMapStore = defineStore('map', () => {
     const resetMap = () => {
         clearSelection()
         visibleLayers.value = []
-        selectedYear.value = new Date().getFullYear()
+        selectedPeriod.value = { ...DEFAULT_YEAR_PERIOD }
     }
 
     return {
         // State
         selectedRegion,
         selectedDistrict,
-        selectedYear,
+        selectedPeriod,
         visibleLayers,
         drawingMode,
         mapInstance,
@@ -93,7 +96,7 @@ export const useMapStore = defineStore('map', () => {
         // Actions
         setSelectedRegion,
         setSelectedDistrict,
-        setSelectedYear,
+        setSelectedPeriod,
         toggleLayer,
         setDrawingMode,
         setMapInstance,

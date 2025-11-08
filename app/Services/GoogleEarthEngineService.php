@@ -1814,6 +1814,9 @@ class GoogleEarthEngineService
      */
     private function buildAvailableYearsExpression(array $geometry): string
     {
+        $minYear = config('earthengine.defaults.start_year', 1993);
+        $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
+
         return "
             // Get available years from multiple datasets
             var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY');
@@ -1855,8 +1858,8 @@ class GoogleEarthEngineService
                 );
             }, ee.List([]));
             
-            // Filter years to reasonable range (1993-2025)
-            var filteredYears = commonYears.filter(ee.Filter.rangeContains('item', 1993, 2025));
+            // Filter years to reasonable range ({$minYear}-{$maxYear})
+            var filteredYears = commonYears.filter(ee.Filter.rangeContains('item', {$minYear}, {$maxYear}));
             
             // Get min and max years
             var minYear = filteredYears.reduce(ee.Reducer.min());
@@ -1880,11 +1883,15 @@ class GoogleEarthEngineService
      */
     private function processAvailableYears(array $geeData): array
     {
+        $minYearDefault = (int) config('earthengine.defaults.start_year', 1993);
+        $maxYearDefault = max($minYearDefault, (int) config('earthengine.defaults.end_year', date('Y')));
+        $fallbackYears = range($minYearDefault, $maxYearDefault);
+
         try {
             // Extract years from GEE response
-            $availableYears = $geeData['available_years'] ?? range(1993, date('Y'));
-            $minYear = $geeData['min_year'] ?? 1993;
-            $maxYear = $geeData['max_year'] ?? date('Y');
+            $availableYears = $geeData['available_years'] ?? $fallbackYears;
+            $minYear = $geeData['min_year'] ?? $minYearDefault;
+            $maxYear = $geeData['max_year'] ?? $maxYearDefault;
             $totalYears = $geeData['total_years'] ?? count($availableYears);
             
             // Ensure years are sorted
@@ -1902,10 +1909,10 @@ class GoogleEarthEngineService
             
             // Return fallback years
             return [
-                'available_years' => range(1993, date('Y')),
-                'oldest_year' => 1993,
-                'newest_year' => date('Y'),
-                'total_years' => 9,
+                'available_years' => $fallbackYears,
+                'oldest_year' => $minYearDefault,
+                'newest_year' => $maxYearDefault,
+                'total_years' => count($fallbackYears),
                 'source' => 'fallback_range'
             ];
         }

@@ -9,7 +9,10 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 // Schedule Pulse data aggregation (required for Pulse to work)
-Schedule::command('pulse:check')->everyFiveMinutes();
+Schedule::command('pulse:check')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
 
 // Schedule automatic precomputation of latest year erosion maps
 // Runs twice per year: June 1st and December 1st at 2:00 AM
