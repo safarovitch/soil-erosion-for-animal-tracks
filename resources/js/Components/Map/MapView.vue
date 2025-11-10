@@ -58,7 +58,7 @@ const topoJsonLayer = ref(null)
 const areaHighlightLayer = ref(null) // Layer for highlighting selected areas
 const erosionDataByDistrict = ref({}) // Store erosion data for coloring
 const drawnFeatures = ref([]) // Store all drawn features for management
-const detailedErosionLayers = ref(new Map()) // Map of detailed erosion tile layers keyed by area-period
+const detailedErosionLayers = ref({}) // Store detailed erosion tile layers keyed by area-period
 const animatedLayers = ref(new Set()) // Track layers with animated borders
 const baseLayer = ref(null) // Reference to base layer
 const labelsLayer = ref(null) // Reference to labels layer
@@ -74,25 +74,38 @@ const periodEndYear = computed(() => selectedPeriod.value.endYear)
 const buildDetailedLayerKey = (areaType, areaId, startYear, endYear) =>
   `${areaType}-${areaId}-${startYear}-${endYear}`
 
+const ensureDetailedLayerStore = () => {
+  if (
+    !detailedErosionLayers.value ||
+    typeof detailedErosionLayers.value !== 'object' ||
+    Array.isArray(detailedErosionLayers.value)
+  ) {
+    detailedErosionLayers.value = {}
+  }
+  return detailedErosionLayers.value
+}
+
 const removeDetailedLayer = (layerKey) => {
-  const existingLayer = detailedErosionLayers.value.get(layerKey)
+  const layerStore = ensureDetailedLayerStore()
+  const existingLayer = layerStore[layerKey]
   if (existingLayer && map.value) {
     map.value.removeLayer(existingLayer)
   }
-  detailedErosionLayers.value.delete(layerKey)
+  delete layerStore[layerKey]
 }
 
 const registerDetailedLayer = (layerKey, layerInstance) => {
-  const existingLayer = detailedErosionLayers.value.get(layerKey)
+  const layerStore = ensureDetailedLayerStore()
+  const existingLayer = layerStore[layerKey]
   if (existingLayer && map.value) {
     map.value.removeLayer(existingLayer)
   }
-  detailedErosionLayers.value.set(layerKey, layerInstance)
+  layerStore[layerKey] = layerInstance
 }
 
 const removeUnusedDetailedLayers = (validKeys) => {
-  const keys = Array.from(detailedErosionLayers.value.keys())
-  keys.forEach((key) => {
+  const layerStore = ensureDetailedLayerStore()
+  Object.keys(layerStore).forEach((key) => {
     if (!validKeys.has(key)) {
       removeDetailedLayer(key)
     }
@@ -2333,8 +2346,8 @@ const clearAllLayerColors = () => {
 
   // Remove all detailed erosion layers
   if (map.value) {
-    const keys = Array.from(detailedErosionLayers.value.keys())
-    keys.forEach(removeDetailedLayer)
+    const layerStore = ensureDetailedLayerStore()
+    Object.keys(layerStore).forEach(removeDetailedLayer)
   }
   
   console.log('Cleared all layer colors from map')
