@@ -136,7 +136,7 @@ class CalculateErosionFactors extends Command
             $this->line("  This may take several minutes for large areas...");
             $this->newLine();
 
-            $response = Http::timeout(600)
+            $response = Http::timeout(1800)
                 ->connectTimeout(10)  // Connection timeout
                 ->post(
                     "{$this->pythonServiceUrl}/api/rusle/factors",

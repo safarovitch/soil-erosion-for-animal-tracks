@@ -165,7 +165,7 @@ class GoogleEarthEngineService
             ]);
             
             // Get all factors and soil erosion from Python service
-            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
                 'area_geometry' => $geometry,
                 'year' => $endYear, // Legacy compatibility
                 'start_year' => $startYear,
@@ -340,7 +340,7 @@ class GoogleEarthEngineService
             $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
             
             // Call Python GEE service
-            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/compute", [
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/compute", [
                 'area_geometry' => $geometry,
                 'year' => $endYear,
                 'start_year' => $startYear,
@@ -376,7 +376,7 @@ class GoogleEarthEngineService
             $tempArea->name_en = 'Custom Area';
             
             // Get individual factors from Python service
-            $factorsResponse = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+            $factorsResponse = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
                 'area_geometry' => $geometry,
                 'year' => $endYear,
                 'start_year' => $startYear,
@@ -806,7 +806,7 @@ class GoogleEarthEngineService
         ]);
         
         // Call Python service for specific factor
-        $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
+        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
             'area_geometry' => $geometry,
             'year' => $year,
             'factors' => [$factorKey],  // Request only the specific factor
@@ -909,7 +909,7 @@ class GoogleEarthEngineService
             ]);
 
             // Call Python GEE service with pre-calculated bbox
-            $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/detailed-grid", [
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/detailed-grid", [
                 'area_geometry' => $geometry,
                 'year' => $year,
                 'grid_size' => $gridSize,
@@ -1018,7 +1018,7 @@ class GoogleEarthEngineService
             ];
 
             $response = Http::withToken($this->accessToken)
-                ->timeout(600)
+                ->timeout(1800)
                 ->post("{$this->baseUrl}/projects/{$this->projectId}/image:computeStatistics", $requestBody);
 
             if (!$response->successful()) {
@@ -1535,7 +1535,7 @@ class GoogleEarthEngineService
             ];
 
             $response = Http::withToken($this->accessToken)
-                ->timeout(600)
+                ->timeout(1800)
                 ->post("{$this->baseUrl}/projects/{$this->projectId}/image:computeStatistics", $requestBody);
 
             if (!$response->successful()) {

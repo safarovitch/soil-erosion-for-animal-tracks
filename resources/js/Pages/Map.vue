@@ -57,7 +57,7 @@
                         v-model:selectedDistrict="selectedDistrict"
                         :selected-areas="selectedAreas"
                         :regions="regions"
-                        :districts="filteredDistricts"
+                        :districts="districts"
                         @region-change="handleRegionChange"
                         @district-change="handleDistrictChange"
                         @areas-change="handleAreasChange"
@@ -504,20 +504,13 @@ const bottomPanelHeight = ref(300);
 
 // Local copies of regions and districts that can be updated with GeoJSON data
 // Filter out "Unknown" regions from props
-const regions = ref((props.regions || []).filter(region => 
-    region.name_en && !region.name_en.toLowerCase().includes('unknown')
-));
+const regions = ref(
+    (props.regions || []).filter((region) => {
+        const name = (region.name_en || region.name || '').toLowerCase();
+        return name && !name.includes('unknown') && !name.includes('dushanbe');
+    })
+);
 const districts = ref(props.districts || []);
-
-// Computed property to filter districts based on selected region
-const filteredDistricts = computed(() => {
-    if (!selectedRegion.value) {
-        return [];
-    }
-    return districts.value.filter(
-        (district) => district.region_id === selectedRegion.value.id
-    );
-});
 
 const canApply = computed(() => selectedAreas.value.length > 0 && !loading.value);
 
@@ -771,9 +764,10 @@ const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
         });
 
         // Filter out "Unknown" region
-        regions.value = combinedRegions.filter(region => 
-            region.name_en && !region.name_en.toLowerCase().includes('unknown')
-        );
+        regions.value = combinedRegions.filter((region) => {
+            const name = (region.name_en || region.name || '').toLowerCase();
+            return name && !name.includes('unknown') && !name.includes('dushanbe');
+        });
         console.log(`Total regions available: ${regions.value.length}`);
     } catch (error) {
         console.warn("Could not load districts from GeoJSON:", error.message);
