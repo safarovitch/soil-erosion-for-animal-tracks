@@ -7,10 +7,12 @@ import numpy as np
 import logging
 import math
 import tempfile
+import time
 from pathlib import Path
 
 import requests
 import rasterio
+from requests.exceptions import ReadTimeout, RequestException
 from rasterio.merge import merge
 from gee_service import gee_service
 from rusle_calculator import RUSLECalculator
@@ -331,13 +333,47 @@ class ErosionRasterGenerator:
                     logger.info(f"Downloading tile ({row+1}/{rows}, {col+1}/{cols}) "
                                 f"{tile_width_px}x{tile_height_px}px timeout={int(timeout)}s")
 
-                    response = requests.get(url, timeout=int(timeout))
-                    response.raise_for_status()
+                    max_retries = 3
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            response = requests.get(url, timeout=int(timeout))
+                            response.raise_for_status()
 
-                    with open(tile_path, 'wb') as f:
-                        f.write(response.content)
+                            with open(tile_path, 'wb') as f:
+                                f.write(response.content)
 
-                    tile_paths.append(tile_path)
+                            tile_paths.append(tile_path)
+                            break
+                        except ReadTimeout:
+                            if attempt == max_retries:
+                                logger.error(
+                                    f"Read timeout downloading tile ({row+1}/{rows}, {col+1}/{cols}). "
+                                    f"Reached {max_retries} retries; giving up."
+                                )
+                                raise
+
+                            next_attempt = attempt + 1
+                            backoff = min(120, 10 * attempt)
+                            logger.warning(
+                                f"Timeout downloading tile ({row+1}/{rows}, {col+1}/{cols}), "
+                                f"retrying in {backoff}s (attempt {next_attempt}/{max_retries}, timeout={int(timeout)}s)."
+                            )
+                            time.sleep(backoff)
+                        except RequestException as exc:
+                            if attempt == max_retries:
+                                logger.error(
+                                    f"Request failed downloading tile ({row+1}/{rows}, {col+1}/{cols}). "
+                                    f"Reached {max_retries} retries; giving up."
+                                )
+                                raise
+
+                            next_attempt = attempt + 1
+                            backoff = min(120, 5 * attempt)
+                            logger.warning(
+                                f"Error downloading tile ({row+1}/{rows}, {col+1}/{cols}): {exc}. "
+                                f"Retrying in {backoff}s (attempt {next_attempt}/{max_retries})."
+                            )
+                            time.sleep(backoff)
 
             if not tile_paths:
                 raise RuntimeError("Tiled download produced no tiles.")

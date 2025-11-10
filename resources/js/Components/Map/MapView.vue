@@ -70,6 +70,14 @@ const scaleLine = ref(null) // Scale line control
 const selectedPeriod = computed(() => props.selectedPeriod || DEFAULT_YEAR_PERIOD)
 const periodStartYear = computed(() => selectedPeriod.value.startYear)
 const periodEndYear = computed(() => selectedPeriod.value.endYear)
+const selectedPeriodLength = computed(() => {
+  const start = Number(periodStartYear.value)
+  const end = Number(periodEndYear.value)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return 0
+  }
+  return Math.max(0, (end - start) + 1)
+})
 
 const buildDetailedLayerKey = (areaType, areaId, startYear, endYear) =>
   `${areaType}-${areaId}-${startYear}-${endYear}`
@@ -115,9 +123,9 @@ const removeUnusedDetailedLayers = (validKeys) => {
 // Map configuration
 const mapConfig = {
   center: fromLonLat([71.5, 38.5]), // Tajikistan center
-  zoom: 8,  // Start at zoom 8 to show precomputed tiles
+  zoom: 7,  // Start slightly zoomed out while keeping detail visible
   maxZoom: 18,
-  minZoom: 6,  // Allow zoom out to 6, but tiles only available from 8+
+  minZoom: 6,  // Allow zoom out to 6
 }
 
 // Initialize map
@@ -305,7 +313,7 @@ const getErosionColorRGB = (erosionRate) => {
 }
 
 // Smooth border animation functions
-const animateBorderDrawing = (layer, features, duration = 1200, strokeColor = 'rgba(0,0,0,0.6)', strokeWidth = 1.5) => {
+const animateBorderDrawing = (layer, features, duration = 1200, strokeColor = 'rgba(0,0,0,0.6)', strokeWidth = 1) => {
   if (!layer || !features || features.length === 0) return
 
   const startTime = Date.now()
@@ -938,7 +946,7 @@ const loadDetailedErosionData = async (area) => {
         }),
         opacity: 1.0,
         zIndex: 8,
-        minZoom: 7,
+        minZoom: 6,
         maxZoom: 18
       })
 
@@ -1086,7 +1094,8 @@ const updateMapLayers = async () => {
       name: 'Rainfall Trend',
       type: 'diverging',
       apiEndpoint: '/api/erosion/layers/rainfall-slope',
-      defaultOpacity: 1.0
+      defaultOpacity: 1.0,
+      minYears: 3
     },
     rainfall_cv: {
       name: 'Rainfall CV',
@@ -1171,6 +1180,17 @@ const updateMapLayers = async () => {
     if (layerDefinitions[layerId]) {
       const layerDef = layerDefinitions[layerId]
       const opacity = layerDef.defaultOpacity
+
+      if (layerDef.minYears && selectedPeriodLength.value < layerDef.minYears) {
+        console.warn(`${layerDef.name} requires at least ${layerDef.minYears} years. Current period length: ${selectedPeriodLength.value}`)
+        emit('layer-warning', {
+          type: 'warning',
+          title: 'Extend Period Range',
+          message: `${layerDef.name} requires at least ${layerDef.minYears} years for analysis.`,
+          details: `Select a period covering ${layerDef.minYears} or more years to view this layer. Current selection spans ${selectedPeriodLength.value || 0} year(s).`
+        })
+        return
+      }
 
       // Handle erosion layer specially
       if (layerId === 'erosion') {
@@ -1384,12 +1404,12 @@ const fetchAndRenderLayer = async (layerId, layerDef, area, areaType, opacity) =
         source: new XYZ({
           url: layerData.tiles,
           crossOrigin: 'anonymous',
-          minZoom: 8,  // Precomputed tiles are for zoom 8-12
+          minZoom: 6,  // Precomputed tiles are now available from zoom level 6
           maxZoom: 12
         }),
         opacity: opacity,
         zIndex: 8, // Below district borders (15) and selection layers (20)
-        minZoom: 8,  // Don't show layer below zoom 8
+        minZoom: 6,  // Don't show layer below zoom 6
         maxZoom: 18,  // Allow upscaling beyond zoom 12
         title: layerDef.name
       })
@@ -1817,22 +1837,19 @@ watch(() => props.selectedDistrict, (newDistrict) => {
 }, { immediate: true })
 
 
-watch(() => props.visibleLayers, (newLayers) => {
-  console.log('Visible layers changed:', newLayers)
+watch(() => props.visibleLayers, (newLayers, oldLayers) => {
+  console.log('Visible layers changed (awaiting apply):', newLayers)
   if (!map.value) {
     console.log('Map not ready yet')
     return
   }
-
-  updateMapLayers()
-}, { immediate: true, deep: true })
+}, { deep: true })
 
 watch(() => props.analysisTrigger, (trigger, previous) => {
   if (!map.value) {
     console.log('Analysis trigger changed but map not ready yet')
     return
   }
-
   if (typeof trigger === 'number' && trigger > 0) {
     console.log('Analysis trigger received, refreshing map layers')
     updateMapLayers()
