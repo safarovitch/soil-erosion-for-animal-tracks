@@ -57,40 +57,81 @@ def health_check():
 def compute_rusle():
     """
     Compute RUSLE erosion for an area
-    Input: {area_geometry: GeoJSON, year: int, period: str}
+    Input: {area_geometry: GeoJSON, start_year: int, end_year: int}
     Output: {statistics: {...}, success: bool}
     """
     try:
         data = request.get_json()
         
         # Validate input
-        if not data or 'area_geometry' not in data or 'year' not in data:
+        if not data or 'area_geometry' not in data:
             return jsonify({
                 'success': False,
-                'error': 'Missing required parameters: area_geometry, year'
+                'error': 'Missing required parameter: area_geometry'
             }), 400
         
         area_geometry = data['area_geometry']
-        year = int(data['year'])
+        start_year = data.get('start_year', data.get('year'))
+        end_year = data.get('end_year', start_year)
         
-        # Validate year range
-        if year < Config.RUSLE_START_YEAR or year > Config.RUSLE_END_YEAR:
+        if start_year is None:
             return jsonify({
                 'success': False,
-                'error': f'Year must be between {Config.RUSLE_START_YEAR} and {Config.RUSLE_END_YEAR}'
+                'error': 'Missing required parameter: start_year'
+            }), 400
+        
+        start_year = int(start_year)
+        end_year = int(end_year) if end_year is not None else start_year
+        
+        # Validate year range
+        if start_year < Config.RUSLE_START_YEAR or end_year > Config.RUSLE_END_YEAR:
+            return jsonify({
+                'success': False,
+                'error': f'Years must be between {Config.RUSLE_START_YEAR} and {Config.RUSLE_END_YEAR}'
+            }), 400
+        
+        if end_year < start_year:
+            return jsonify({
+                'success': False,
+                'error': 'end_year must be greater than or equal to start_year'
             }), 400
         
         # Convert GeoJSON to EE Geometry
         geometry = gee_service.geometry_from_geojson(area_geometry)
         
-        # Compute RUSLE
-        result = rusle_calculator.compute_rusle(year, geometry)
+        # Compute RUSLE for the requested period
+        if end_year != start_year:
+            r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
+            result = rusle_calculator.compute_rusle(
+                start_year,
+                geometry,
+                r_factor_image=r_factor
+            )
+        else:
+            result = rusle_calculator.compute_rusle(start_year, geometry)
         
+        rainfall_stats = rusle_calculator.compute_rainfall_statistics(start_year, end_year, geometry)
+        erosion_classes = rusle_calculator.compute_erosion_class_breakdown(
+            result['image'],
+            geometry,
+            scale=100
+        )
+        
+        period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
+
         return jsonify({
             'success': True,
             'data': {
                 'statistics': result['statistics'],
-                'year': year
+                'start_year': start_year,
+                'end_year': end_year,
+                'rainfall_statistics': rainfall_stats,
+                'erosion_class_breakdown': erosion_classes,
+                'period': {
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'label': period_label
+                }
             }
         }), 200
         
@@ -111,28 +152,44 @@ def compute_rusle():
 def compute_rusle_factors():
     """
     Compute individual RUSLE factors (R, K, LS, C, P) for an area
-    Input: {area_geometry: GeoJSON, year: int, factors: ['r','k','ls','c','p'] or 'all'}
+    Input: {area_geometry: GeoJSON, start_year: int, end_year: int, factors: ['r','k','ls','c','p'] or 'all'}
     Output: {factors: {r: {...}, k: {...}, ...}, success: bool}
     """
     try:
         data = request.get_json()
         
         # Validate input
-        if not data or 'area_geometry' not in data or 'year' not in data:
+        if not data or 'area_geometry' not in data:
             return jsonify({
                 'success': False,
-                'error': 'Missing required parameters: area_geometry, year'
+                'error': 'Missing required parameter: area_geometry'
             }), 400
         
         area_geometry = data['area_geometry']
-        year = int(data['year'])
+        start_year = data.get('start_year', data.get('year'))
+        end_year = data.get('end_year', start_year)
+
+        if start_year is None:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameter: start_year'
+            }), 400
+
+        start_year = int(start_year)
+        end_year = int(end_year) if end_year is not None else start_year
         requested_factors = data.get('factors', 'all')  # 'all' or list like ['r','k','ls']
         
         # Validate year range
-        if year < Config.RUSLE_START_YEAR or year > Config.RUSLE_END_YEAR:
+        if start_year < Config.RUSLE_START_YEAR or end_year > Config.RUSLE_END_YEAR:
             return jsonify({
                 'success': False,
-                'error': f'Year must be between {Config.RUSLE_START_YEAR} and {Config.RUSLE_END_YEAR}'
+                'error': f'Years must be between {Config.RUSLE_START_YEAR} and {Config.RUSLE_END_YEAR}'
+            }), 400
+
+        if end_year < start_year:
+            return jsonify({
+                'success': False,
+                'error': 'end_year must be greater than or equal to start_year'
             }), 400
         
         # Convert GeoJSON to EE Geometry
@@ -153,7 +210,7 @@ def compute_rusle_factors():
                 'error': f'Invalid factor names: {invalid_factors}. Valid: {valid_factors}'
             }), 400
         
-        logger.info(f"Computing factors: {factors_to_compute} for year {year}")
+        logger.info(f"Computing factors: {factors_to_compute} for period {start_year}-{end_year}")
         
         # Compute requested factors
         factors_result = {}
@@ -161,7 +218,10 @@ def compute_rusle_factors():
         
         if 'r' in factors_to_compute:
             logger.info("Computing R-factor...")
-            r_factor = rusle_calculator.compute_r_factor(year)
+            if end_year != start_year:
+                r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
+            else:
+                r_factor = rusle_calculator.compute_r_factor(start_year, geometry)
             r_stats = gee_service.compute_statistics(r_factor, geometry, scale=scale)
             # Handle None values - don't use defaults, raise error if data is missing
             r_mean = r_stats.get('R_factor_mean')
@@ -225,7 +285,7 @@ def compute_rusle_factors():
         
         if 'c' in factors_to_compute:
             logger.info("Computing C-factor...")
-            c_factor = rusle_calculator.compute_c_factor(year)
+            c_factor = rusle_calculator.compute_c_factor(end_year, geometry)
             c_stats = gee_service.compute_statistics(c_factor, geometry, scale=scale)
             c_mean = c_stats.get('C_factor_mean')
             c_min = c_stats.get('C_factor_min')
@@ -246,7 +306,7 @@ def compute_rusle_factors():
         
         if 'p' in factors_to_compute:
             logger.info("Computing P-factor...")
-            p_factor = rusle_calculator.compute_p_factor(year)
+            p_factor = rusle_calculator.compute_p_factor(end_year, geometry)
             p_stats = gee_service.compute_statistics(p_factor, geometry, scale=scale)
             p_mean = p_stats.get('P_factor_mean')
             p_min = p_stats.get('P_factor_min')
@@ -269,15 +329,33 @@ def compute_rusle_factors():
         soil_erosion = None
         if set(factors_to_compute) == set(valid_factors):
             logger.info("Computing final soil erosion (A = R × K × LS × C × P)...")
-            rusle_result = rusle_calculator.compute_rusle(year, geometry, scale=scale, compute_stats=True)
+            if end_year != start_year:
+                r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
+                rusle_result = rusle_calculator.compute_rusle(
+                    start_year,
+                    geometry,
+                    scale=scale,
+                    compute_stats=True,
+                    r_factor_image=r_factor
+                )
+            else:
+                rusle_result = rusle_calculator.compute_rusle(start_year, geometry, scale=scale, compute_stats=True)
             soil_erosion = rusle_result['statistics']
         
+        period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
+
         return jsonify({
             'success': True,
             'data': {
                 'factors': factors_result,
                 'soil_erosion': soil_erosion,
-                'year': year,
+                'start_year': start_year,
+                'end_year': end_year,
+                'period': {
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'label': period_label
+                },
                 'scale': scale
             }
         }), 200
@@ -551,7 +629,7 @@ def trigger_precompute():
         data = request.get_json()
         
         # Validate required fields
-        required_fields = ['area_type', 'area_id', 'year', 'area_geometry']
+        required_fields = ['area_type', 'area_id', 'area_geometry']
         for field in required_fields:
             if field not in data:
                 return jsonify({
@@ -561,9 +639,33 @@ def trigger_precompute():
         
         area_type = data.get('area_type')  # 'region' or 'district'
         area_id = data.get('area_id')
-        year = data.get('year')
+        start_year = data.get('start_year') or data.get('year')
+        end_year = data.get('end_year') if data.get('end_year') is not None else start_year
         geometry = data.get('area_geometry')
         bbox = data.get('bbox')
+        
+        if start_year is None:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field: start_year'
+            }), 400
+        
+        try:
+            start_year = int(start_year)
+            end_year = int(end_year)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'start_year and end_year must be integers'
+            }), 400
+        
+        if end_year < start_year:
+            return jsonify({
+                'success': False,
+                'error': 'end_year must be greater than or equal to start_year'
+            }), 400
+        
+        period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
         
         # Validate area_type
         if area_type not in ['region', 'district']:
@@ -573,10 +675,15 @@ def trigger_precompute():
             }), 400
         
         # Queue background task
-        logger.info(f"Queueing precomputation: {area_type} {area_id}, year {year}")
+        logger.info(f"Queueing precomputation: {area_type} {area_id}, period {period_label}")
         
         task = generate_erosion_map_task.delay(
-            area_type, area_id, year, geometry, bbox
+            area_type,
+            area_id,
+            start_year,
+            geometry,
+            bbox,
+            end_year  # Pass as positional argument (6th parameter)
         )
         
         logger.info(f"Task queued with ID: {task.id}")
@@ -585,7 +692,7 @@ def trigger_precompute():
             'success': True,
             'task_id': task.id,
             'status': 'queued',
-            'message': f'Precomputation queued for {area_type} {area_id}, year {year}'
+            'message': f'Precomputation queued for {area_type} {area_id}, period {period_label}'
         }), 202
         
     except Exception as e:

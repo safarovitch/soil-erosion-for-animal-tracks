@@ -22,24 +22,38 @@ class ErosionTileService
      * 
      * @param string $areaType 'region' or 'district'
      * @param int $areaId ID of the region or district
-     * @param int $year Year (2015-2024)
+     * @param int $startYear Start year
+     * @param int|null $endYear Inclusive end year (defaults to start year)
      * @return array Status and information about the map
      */
-    public function getOrQueueMap(string $areaType, int $areaId, int $year): array
+    public function getOrQueueMap(string $areaType, int $areaId, int $startYear, ?int $endYear = null): array
     {
+        $startYear = (int) $startYear;
+        $endYear = (int) ($endYear ?? $startYear);
+        $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
+
         // Check if already precomputed
-        $map = PrecomputedErosionMap::where([
+        $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $year
-        ])->first();
+            'year' => $startYear
+        ]);
+
+        if ($endYear !== $startYear) {
+            $mapQuery->where('metadata->period->end_year', $endYear);
+        }
+
+        $map = $mapQuery->first();
 
         if ($map && $map->isAvailable()) {
             return [
                 'status' => 'available',
                 'tiles_url' => $map->tile_url,
                 'statistics' => $map->statistics,
-                'computed_at' => $map->computed_at?->toISOString()
+                'computed_at' => $map->computed_at?->toISOString(),
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period_label' => $map->period_label,
             ];
         }
 
@@ -47,6 +61,9 @@ class ErosionTileService
             return [
                 'status' => $map->status,
                 'task_id' => $map->metadata['task_id'] ?? null,
+                 'start_year' => $startYear,
+                 'end_year' => $endYear,
+                'period_label' => $map->period_label,
                 'message' => $map->status === 'queued' 
                     ? 'Map generation is queued' 
                     : 'Map is currently being generated'
@@ -55,19 +72,21 @@ class ErosionTileService
 
         if ($map && $map->status === 'failed') {
             // Retry failed computation
-            Log::info("Retrying failed computation for {$areaType} {$areaId}, year {$year}");
-            return $this->queueComputation($areaType, $areaId, $year, $map);
+            Log::info("Retrying failed computation for {$areaType} {$areaId}, period {$periodLabel}");
+            return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $map);
         }
 
         // Queue new computation
-        return $this->queueComputation($areaType, $areaId, $year);
+        return $this->queueComputation($areaType, $areaId, $startYear, $endYear);
     }
 
     /**
      * Queue a new computation task
      */
-    private function queueComputation(string $areaType, int $areaId, int $year, ?PrecomputedErosionMap $existingMap = null): array
+    private function queueComputation(string $areaType, int $areaId, int $startYear, int $endYear, ?PrecomputedErosionMap $existingMap = null): array
     {
+        $startYear = (int) $startYear;
+        $endYear = (int) $endYear;
         try {
             // Get geometry
             $area = $areaType === 'region' 
@@ -88,7 +107,8 @@ class ErosionTileService
             // Calculate bbox
             $bbox = $this->calculateBbox($geometry);
 
-            Log::info("Queueing computation for {$areaType} {$areaId}, year {$year}");
+            $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
+            Log::info("Queueing computation for {$areaType} {$areaId}, period {$periodLabel}");
 
             // Call Python service to queue task
             $response = Http::timeout(30)->post(
@@ -96,7 +116,8 @@ class ErosionTileService
                 [
                     'area_type' => $areaType,
                     'area_id' => $areaId,
-                    'year' => $year,
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
                     'area_geometry' => $geometry,
                     'bbox' => $bbox
                 ]
@@ -116,6 +137,11 @@ class ErosionTileService
             if ($existingMap) {
                 $metadata = $existingMap->metadata ?? [];
                 $metadata['task_id'] = $taskId;
+                $metadata['period'] = [
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'label' => $periodLabel,
+                ];
                 $existingMap->update([
                     'status' => 'queued',
                     'metadata' => $metadata,
@@ -125,11 +151,16 @@ class ErosionTileService
                 PrecomputedErosionMap::create([
                     'area_type' => $areaType,
                     'area_id' => $areaId,
-                    'year' => $year,
+                    'year' => $startYear,
                     'status' => 'queued',
                     'metadata' => [
                         'task_id' => $taskId,
-                        'bbox' => $bbox
+                        'bbox' => $bbox,
+                        'period' => [
+                            'start_year' => $startYear,
+                            'end_year' => $endYear,
+                            'label' => $periodLabel,
+                        ],
                     ]
                 ]);
             }
@@ -139,7 +170,10 @@ class ErosionTileService
             return [
                 'status' => 'queued',
                 'task_id' => $taskId,
-                'message' => "Computation queued for {$areaType} {$areaId}, year {$year}"
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period_label' => $periodLabel,
+                'message' => "Computation queued for {$areaType} {$areaId}, period {$periodLabel}"
             ];
 
         } catch (\Exception $e) {
@@ -150,6 +184,13 @@ class ErosionTileService
                 'error' => $e->getMessage()
             ];
         }
+    }
+
+    private function buildPeriodLabel(int $startYear, int $endYear): string
+    {
+        return $startYear === $endYear
+            ? (string) $startYear
+            : "{$startYear}-{$endYear}";
     }
 
     /**
@@ -230,27 +271,35 @@ class ErosionTileService
         $taskId = $data['task_id'] ?? null;
         $areaType = $data['area_type'] ?? null;
         $areaId = $data['area_id'] ?? null;
-        $year = $data['year'] ?? null;
+        $startYear = $data['start_year'] ?? $data['year'] ?? null;
+        $endYear = $data['end_year'] ?? $startYear;
+        $periodLabel = $data['period_label'] ?? $this->buildPeriodLabel((int) $startYear, (int) $endYear);
 
-        if (!$taskId || !$areaType || !$areaId || !$year) {
-            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, year');
+        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
         // Find and update the map record
-        $map = PrecomputedErosionMap::where([
+        $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $year
-        ])->first();
+            'year' => $startYear
+        ]);
+
+        if ($endYear !== $startYear) {
+            $mapQuery->where('metadata->period->end_year', $endYear);
+        }
+
+        $map = $mapQuery->first();
 
         if ($map) {
             $map->update([
                 'status' => 'processing'
             ]);
             
-            Log::info("Map status updated to processing: {$areaType} {$areaId}, year {$year}");
+            Log::info("Map status updated to processing: {$areaType} {$areaId}, period {$periodLabel}");
         } else {
-            Log::warning("No map found for task started: {$areaType} {$areaId}, year {$year}");
+            Log::warning("No map found for task started: {$areaType} {$areaId}, period {$periodLabel}");
         }
 
         return [
@@ -267,56 +316,81 @@ class ErosionTileService
         $taskId = $data['task_id'] ?? null;
         $areaType = $data['area_type'] ?? null;
         $areaId = $data['area_id'] ?? null;
-        $year = $data['year'] ?? null;
+        $startYear = $data['start_year'] ?? $data['year'] ?? null;
+        $endYear = $data['end_year'] ?? $startYear;
+        $startYear = $startYear !== null ? (int) $startYear : null;
+        $endYear = $endYear !== null ? (int) $endYear : $startYear;
+        $periodLabel = $data['period_label'] ?? $this->buildPeriodLabel((int) $startYear, (int) $endYear);
 
-        if (!$taskId || !$areaType || !$areaId || !$year) {
-            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, year');
+        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
         // Find the map record
-        $map = PrecomputedErosionMap::where([
+        $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $year
-        ])->first();
+            'year' => $startYear
+        ]);
+
+        if ($endYear !== $startYear) {
+            $mapQuery->where('metadata->period->end_year', $endYear);
+        }
+
+        $map = $mapQuery->first();
 
         if (!$map) {
-            Log::warning("No map found for {$areaType} {$areaId}, year {$year}");
+            Log::warning("No map found for {$areaType} {$areaId}, period {$periodLabel}");
             
             // Create new record
             $map = PrecomputedErosionMap::create([
                 'area_type' => $areaType,
                 'area_id' => $areaId,
-                'year' => $year,
+                'year' => $startYear,
                 'status' => 'completed',
                 'geotiff_path' => $data['geotiff_path'] ?? null,
                 'tiles_path' => $data['tiles_path'] ?? null,
                 'statistics' => $data['statistics'] ?? null,
                 'metadata' => array_merge(
-                    ['task_id' => $taskId],
+                    [
+                        'task_id' => $taskId,
+                        'period' => [
+                            'start_year' => $startYear,
+                            'end_year' => $endYear,
+                            'label' => $periodLabel,
+                        ],
+                    ],
                     $data['metadata'] ?? []
                 ),
                 'computed_at' => now()
             ]);
             
-            Log::info("New map record created: {$areaType} {$areaId}, year {$year}");
+            Log::info("New map record created: {$areaType} {$areaId}, period {$periodLabel}");
         } else {
             // Update existing record
+            $updatedMetadata = array_merge(
+                $map->metadata ?? [],
+                ['task_id' => $taskId],
+                $data['metadata'] ?? []
+            );
+
+            $updatedMetadata['period'] = [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'label' => $periodLabel,
+            ];
+
             $map->update([
                 'status' => 'completed',
                 'geotiff_path' => $data['geotiff_path'] ?? null,
                 'tiles_path' => $data['tiles_path'] ?? null,
                 'statistics' => $data['statistics'] ?? null,
-                'metadata' => array_merge(
-                    $map->metadata ?? [],
-                    ['task_id' => $taskId],
-                    $data['metadata'] ?? []
-                ),
+                'metadata' => $updatedMetadata,
                 'computed_at' => now(),
                 'error_message' => null
             ]);
             
-            Log::info("Map updated to completed: {$areaType} {$areaId}, year {$year}");
+            Log::info("Map updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
         }
 
         return [
@@ -333,58 +407,79 @@ class ErosionTileService
         $taskId = $data['task_id'] ?? null;
         $areaType = $data['area_type'] ?? null;
         $areaId = $data['area_id'] ?? null;
-        $year = $data['year'] ?? null;
+        $startYear = $data['start_year'] ?? $data['year'] ?? null;
+        $endYear = $data['end_year'] ?? $startYear;
+        $startYear = $startYear !== null ? (int) $startYear : null;
+        $endYear = $endYear !== null ? (int) $endYear : $startYear;
+        $periodLabel = $data['period_label'] ?? ($startYear !== null ? $this->buildPeriodLabel((int) $startYear, (int) $endYear) : 'unknown');
         $error = $data['error'] ?? 'Unknown error';
         $errorType = $data['error_type'] ?? 'Exception';
 
-        if (!$taskId || !$areaType || !$areaId || !$year) {
-            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, year');
+        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+            throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
         // Find the map record
-        $map = PrecomputedErosionMap::where([
+        $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $year
-        ])->first();
+            'year' => $startYear
+        ]);
+
+        if ($endYear !== $startYear) {
+            $mapQuery->where('metadata->period->end_year', $endYear);
+        }
+
+        $map = $mapQuery->first();
 
         if (!$map) {
-            Log::warning("No map found for failed task: {$areaType} {$areaId}, year {$year}");
+            Log::warning("No map found for failed task: {$areaType} {$areaId}, period {$periodLabel}");
             
             // Create new record with failed status
             $map = PrecomputedErosionMap::create([
                 'area_type' => $areaType,
                 'area_id' => $areaId,
-                'year' => $year,
+                'year' => $startYear,
                 'status' => 'failed',
                 'error_message' => $error,
                 'metadata' => array_merge(
-                    $data['metadata'] ?? [],
-                    [
-                        'task_id' => $taskId,
-                        'error_type' => $errorType
-                    ]
-                )
-            ]);
-            
-            Log::info("New failed map record created: {$areaType} {$areaId}, year {$year}");
-        } else {
-            // Update existing record to failed
-            $map->update([
-                'status' => 'failed',
-                'error_message' => $error,
-                'metadata' => array_merge(
-                    $map->metadata ?? [],
                     $data['metadata'] ?? [],
                     [
                         'task_id' => $taskId,
                         'error_type' => $errorType,
-                        'failed_at' => now()->toIso8601String()
+                        'period' => [
+                            'start_year' => $startYear,
+                            'end_year' => $endYear,
+                            'label' => $periodLabel,
+                        ],
                     ]
                 )
             ]);
             
-            Log::info("Map updated to failed: {$areaType} {$areaId}, year {$year}");
+            Log::info("New failed map record created: {$areaType} {$areaId}, period {$periodLabel}");
+        } else {
+            // Update existing record to failed
+            $updatedMetadata = array_merge(
+                $map->metadata ?? [],
+                $data['metadata'] ?? []
+            );
+
+            $updatedMetadata['task_id'] = $taskId;
+            $updatedMetadata['error_type'] = $errorType;
+            $updatedMetadata['failed_at'] = now()->toIso8601String();
+            $updatedMetadata['period'] = [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'label' => $periodLabel,
+            ];
+
+            $map->update([
+                'status' => 'failed',
+                'error_message' => $error,
+                'metadata' => $updatedMetadata
+            ]);
+            
+            Log::info("Map updated to failed: {$areaType} {$areaId}, period {$periodLabel}");
         }
 
         return [

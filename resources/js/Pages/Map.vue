@@ -83,23 +83,31 @@
                     <!-- Drawing Tools -->
 
                     <div class="mt-8 space-y-2">
-                        <button
-                            @click="applySelection"
-                            :disabled="!canApply"
-                            class="w-full px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors"
-                            :class="[
-                                canApply
-                                    ? 'bg-blue-600 hover:bg-blue-700'
-                                    : 'bg-gray-400 cursor-not-allowed'
-                            ]"
-                        >
-                            Apply Selection
-                        </button>
+                        <div class="flex space-x-2">
+                            <button
+                                @click="applySelection"
+                                :disabled="!canApply"
+                                class="flex-1 px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors"
+                                :class="[
+                                    canApply
+                                        ? 'bg-blue-600 hover:bg-blue-700'
+                                        : 'bg-gray-400 cursor-not-allowed'
+                                ]"
+                            >
+                                Apply Selection
+                            </button>
+                            <button
+                                @click="clearSelection"
+                                class="flex-1 px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-gray-600 hover:bg-gray-700"
+                            >
+                                Clear Selection
+                            </button>
+                        </div>
                         <p
                             v-if="needsApply && canApply"
                             class="text-xs text-amber-600 bg-amber-100 border border-amber-200 rounded-md px-3 py-2"
                         >
-                            Changes pending. Click “Apply Selection” to update statistics and layers.
+                            Changes pending. Click "Apply Selection" to update statistics and layers.
                         </p>
                     </div>
                 </div>
@@ -262,9 +270,7 @@
                     <div class="flex-1 overflow-y-auto p-6 pt-8">
                         <!-- Comprehensive Statistics Panel -->
                         <StatisticsPanel
-                            :selected-area="selectedArea"
-                            :statistics="statistics"
-                            :time-series-data="timeSeriesData"
+                            :area-stats="areaStatistics"
                         />
 
                         <!-- Erosion Risk Legend -->
@@ -471,6 +477,7 @@ const showLabels = ref(true); // Show map labels by default
 const mapInstance = ref(null);
 const mapView = ref(null);
 const statistics = ref(null);
+const areaStatistics = ref([]);
 const timeSeriesData = ref([]);
 const loading = ref(false);
 const progress = ref(0);
@@ -519,6 +526,9 @@ const loginForm = reactive({
     email: "",
     password: "",
 });
+
+const buildDetailedLayerKey = (areaType, areaId, startYear, endYear) =>
+    `${areaType}-${areaId}-${startYear}-${endYear}`;
 
 // Available layers
 const availableLayers = ref([
@@ -617,14 +627,49 @@ const applySelection = async () => {
     analysisTrigger.value += 1;
     needsApply.value = false;
 
-    if (primaryArea && !bottomPanelVisible.value) {
-        bottomPanelVisible.value = true;
-    }
+    areaStatistics.value = [];
+    statistics.value = null;
+    timeSeriesData.value = [];
 
-    if (primaryArea) {
-        await loadAreaStatistics(primaryArea);
+    if (areasToApply.length > 0) {
+        if (!bottomPanelVisible.value) {
+            bottomPanelVisible.value = true;
+        }
+
+        loading.value = true;
+        progress.value = 0;
+        loadingMessage.value = "Calculating RUSLE statistics...";
+
+        const results = [];
+
+        try {
+            for (let index = 0; index < areasToApply.length; index++) {
+                const result = await loadAreaStatistics(
+                    areasToApply[index],
+                    index,
+                    areasToApply.length
+                );
+
+                if (result) {
+                    results.push(result);
+                }
+
+                progress.value = Math.round(
+                    ((index + 1) / areasToApply.length) * 100
+                );
+            }
+
+            areaStatistics.value = results;
+            statistics.value = results[0]?.statistics || null;
+        } finally {
+            setTimeout(() => {
+                loading.value = false;
+                progress.value = 0;
+                loadingMessage.value = "";
+            }, 400);
+        }
     } else {
-        statistics.value = null;
+        bottomPanelVisible.value = false;
     }
 
     if (mapView.value) {
@@ -634,6 +679,33 @@ const applySelection = async () => {
             mapView.value.clearAreaHighlights();
         }
     }
+};
+
+const clearSelection = () => {
+    // Clear all selections
+    selectedRegion.value = null;
+    selectedDistrict.value = null;
+    selectedAreas.value = [];
+    selectedArea.value = null;
+    
+    // Clear visible layers
+    visibleLayers.value = [];
+    
+    // Clear statistics
+    statistics.value = null;
+    
+    // Reset needs apply flag
+    needsApply.value = false;
+    
+    // Clear map highlights
+    if (mapView.value) {
+        mapView.value.clearAreaHighlights();
+    }
+    
+    // Hide bottom panel if visible
+    bottomPanelVisible.value = false;
+    
+    console.log('All selections cleared');
 };
 
 const handleMapReady = (map) => {
@@ -715,21 +787,15 @@ const handleAreaTypeChange = (areaType) => {
 };
 
 // Load statistics for selected area
-const loadAreaStatistics = async (area) => {
+const loadAreaStatistics = async (area, index = 0, total = 1) => {
     if (!area) {
-        statistics.value = null;
-        return;
+        return null;
     }
 
-    loading.value = true;
-    progress.value = 0;
-    loadingMessage.value = "Calculating RUSLE statistics...";
-
     try {
-        progress.value = 25;
-        loadingMessage.value = "Computing erosion factors...";
+        const startYear = currentStartYear.value;
+        const endYear = currentEndYear.value;
 
-        // Determine area type
         let areaType;
         let areaId = area.id;
 
@@ -742,7 +808,8 @@ const loadAreaStatistics = async (area) => {
             areaType = "region";
         }
 
-        // Request RUSLE computation
+        loadingMessage.value = `Calculating RUSLE statistics (${index + 1}/${total})...`;
+
         const response = await fetch("/api/erosion/compute", {
             method: "POST",
             headers: {
@@ -752,110 +819,97 @@ const loadAreaStatistics = async (area) => {
             body: JSON.stringify({
                 area_type: areaType,
                 area_id: areaId,
-                year: currentEndYear.value,
-                start_year: currentStartYear.value,
-                end_year: currentEndYear.value,
+                start_year: startYear,
+                end_year: endYear,
                 period: "annual",
             }),
         });
 
-        progress.value = 60;
-        loadingMessage.value = "Processing statistics...";
-
         const data = await response.json();
 
-        if (!data.success) {
+        if (!data.success || !data.data || !data.data.statistics) {
             throw new Error(data.error || "Failed to compute statistics");
         }
 
-        if (data.data && data.data.statistics) {
-            const stats = data.data.statistics;
-            const erosionRate = parseFloat(stats.mean_erosion_rate) || 0;
+        const stats = data.data.statistics;
+        const meanErosionRate = Number(stats.mean_erosion_rate ?? 0);
+        let rainfallSlope = Number(stats.rainfall_slope ?? 0);
+        let rainfallCV = Number(stats.rainfall_cv ?? 0);
 
-            progress.value = 80;
-            loadingMessage.value = "Fetching rainfall statistics...";
+        if ((!rainfallSlope && !rainfallCV) || rainfallSlope === 0) {
+            try {
+                const rainfallResponse = await fetch("/api/erosion/layers/rainfall-slope", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
+                    },
+                    body: JSON.stringify({
+                        area_type: areaType,
+                        area_id: areaId,
+                        start_year: startYear,
+                        end_year: endYear,
+                    }),
+                });
 
-            // Also fetch rainfall statistics if available
-            let rainfallSlope = stats.rainfall_slope || 0;
-            let rainfallCV = stats.rainfall_cv || 0;
-
-            // If rainfall stats not in response, try to fetch them separately
-            if ((!rainfallSlope && !rainfallCV) || rainfallSlope === 0) {
-                try {
-                    const rainfallResponse = await fetch("/api/erosion/layers/rainfall-slope", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
-                        },
-                        body: JSON.stringify({
-                            area_type: areaType,
-                            area_id: areaId,
-                            start_year: currentStartYear.value,
-                            end_year: currentEndYear.value,
-                        }),
-                    });
-
-                    const rainfallData = await rainfallResponse.json();
-                    if (rainfallData.success && rainfallData.data) {
-                        rainfallSlope = rainfallData.data.mean || 0;
-                    }
-
-                    // Fetch CV
-                    const cvResponse = await fetch("/api/erosion/layers/rainfall-cv", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
-                        },
-                        body: JSON.stringify({
-                            area_type: areaType,
-                            area_id: areaId,
-                            start_year: currentStartYear.value,
-                            end_year: currentEndYear.value,
-                        }),
-                    });
-
-                    const cvData = await cvResponse.json();
-                    if (cvData.success && cvData.data) {
-                        rainfallCV = cvData.data.mean || 0;
-                    }
-                } catch (err) {
-                    console.warn("Failed to fetch rainfall statistics:", err);
-                    // Continue without rainfall stats
+                const rainfallData = await rainfallResponse.json();
+                if (rainfallData.success && rainfallData.data) {
+                    rainfallSlope = Number(rainfallData.data.mean ?? rainfallSlope);
                 }
-            }
 
-            progress.value = 95;
-            loadingMessage.value = "Finalizing...";
+                const cvResponse = await fetch("/api/erosion/layers/rainfall-cv", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
+                    },
+                    body: JSON.stringify({
+                        area_type: areaType,
+                        area_id: areaId,
+                        start_year: startYear,
+                        end_year: endYear,
+                    }),
+                });
 
-            // Update statistics with comprehensive data
-            statistics.value = {
-                meanErosionRate: erosionRate.toFixed(2),
-                minErosionRate: (stats.min_erosion_rate || 0).toFixed(2),
-                maxErosionRate: (stats.max_erosion_rate || 0).toFixed(2),
-                erosionCV: (stats.erosion_cv || 0).toFixed(1),
-                bareSoilFrequency: (stats.bare_soil_frequency || 0).toFixed(1),
-                sustainabilityFactor: (stats.sustainability_factor || 0).toFixed(2),
-                rainfallSlope: rainfallSlope ? rainfallSlope.toFixed(2) : "0.00",
-                rainfallCV: rainfallCV ? rainfallCV.toFixed(1) : "0.0",
-                districtCount: area.region_id ? 1 : null,
-                riskLevel: getRiskLevel(erosionRate),
-                severityDistribution: stats.severity_distribution || [],
-                rusleFactors: stats.rusle_factors || {},
-                topErodingAreas: stats.top_eroding_areas || [],
-                areaType: areaType,
-                areaName: area.name_en || area.name,
-            };
-
-            // Show bottom panel to display statistics
-            if (!bottomPanelVisible.value) {
-                bottomPanelVisible.value = true;
+                const cvData = await cvResponse.json();
+                if (cvData.success && cvData.data) {
+                    rainfallCV = Number(cvData.data.mean ?? rainfallCV);
+                }
+            } catch (err) {
+                console.warn("Failed to fetch rainfall statistics:", err);
             }
         }
 
-        progress.value = 100;
-        loadingMessage.value = "Complete!";
+        const severityDistribution = Array.isArray(stats.severity_distribution)
+            ? stats.severity_distribution
+            : [];
+        const rusleFactors = stats.rusle_factors || {};
+        const topErodingAreas = Array.isArray(stats.top_eroding_areas)
+            ? stats.top_eroding_areas
+            : [];
+
+        const statisticsPayload = {
+            meanErosionRate,
+            minErosionRate: Number(stats.min_erosion_rate ?? 0),
+            maxErosionRate: Number(stats.max_erosion_rate ?? 0),
+            erosionCV: Number(stats.erosion_cv ?? 0),
+            bareSoilFrequency: Number(stats.bare_soil_frequency ?? 0),
+            sustainabilityFactor: Number(stats.sustainability_factor ?? 0),
+            rainfallSlope,
+            rainfallCV,
+            riskLevel: getRiskLevel(meanErosionRate),
+            severityDistribution,
+            rusleFactors,
+            topErodingAreas,
+        };
+
+        return {
+            key: buildDetailedLayerKey(areaType, areaId, startYear, endYear),
+            area,
+            areaType,
+            periodLabel: currentPeriodLabel.value,
+            statistics: statisticsPayload,
+        };
     } catch (error) {
         console.error("Failed to load area statistics:", error);
         showToast(
@@ -864,13 +918,7 @@ const loadAreaStatistics = async (area) => {
             `Could not calculate statistics for ${area.name_en || area.name}.`,
             error.message
         );
-        statistics.value = null;
-    } finally {
-        setTimeout(() => {
-            loading.value = false;
-            progress.value = 0;
-            loadingMessage.value = "";
-        }, 500);
+        return null;
     }
 };
 
@@ -1233,7 +1281,6 @@ const loadErosionData = async () => {
                 requestBody = {
                     area_type: "country",
                     area_id: 0,
-                    year: currentEndYear.value,
                     start_year: currentStartYear.value,
                     end_year: currentEndYear.value,
                     period: "annual",
@@ -1245,7 +1292,6 @@ const loadErosionData = async () => {
                         ? "district"
                         : "region",
                     area_id: selectedArea.value.id,
-                    year: currentEndYear.value,
                     start_year: currentStartYear.value,
                     end_year: currentEndYear.value,
                     period: "annual",
@@ -1256,7 +1302,6 @@ const loadErosionData = async () => {
             requestBody = {
                 area_type: "country",
                 area_id: 0,
-                year: currentEndYear.value,
                 start_year: currentStartYear.value,
                 end_year: currentEndYear.value,
                 period: "annual",
@@ -1394,7 +1439,6 @@ const analyzeGeometry = async (geometry) => {
             },
             body: JSON.stringify({
                 geometry,
-                year: currentEndYear.value,
                 start_year: currentStartYear.value,
                 end_year: currentEndYear.value,
             }),
@@ -1595,136 +1639,175 @@ const exportMapAsPNG = () => {
 
 // Export statistics as CSV
 const exportStatisticsCSV = () => {
-    if (!statistics.value) return;
+    if (!areaStatistics.value.length) return;
 
     const csvData = [];
 
-    // Header
     csvData.push(["RUSLE Soil Erosion Statistics"]);
     csvData.push(["Generated:", new Date().toLocaleString()]);
     csvData.push([]);
 
-    // Area Information
-    csvData.push(["Area Information"]);
-    csvData.push([
-        "Name",
-        selectedArea.value?.name || selectedArea.value?.name_en || "N/A",
-    ]);
-    csvData.push([
-        "Type",
-        selectedArea.value?.region_id ? "District" : "Region",
-    ]);
-    csvData.push(["Period", currentPeriodLabel.value]);
-    csvData.push([]);
+    areaStatistics.value.forEach((entry, index) => {
+        const areaName =
+            entry.area?.name ||
+            entry.area?.name_en ||
+            `Area ${index + 1}`;
 
-    // Erosion Statistics
-    csvData.push(["Erosion Statistics"]);
-    csvData.push(["Metric", "Value", "Unit"]);
-    csvData.push([
-        "Mean Erosion Rate",
-        statistics.value.meanErosionRate || 0,
-        "t/ha/yr",
-    ]);
-    csvData.push([
-        "Min Erosion Rate",
-        statistics.value.minErosionRate || 0,
-        "t/ha/yr",
-    ]);
-    csvData.push([
-        "Max Erosion Rate",
-        statistics.value.maxErosionRate || 0,
-        "t/ha/yr",
-    ]);
-    csvData.push([
-        "Coefficient of Variation",
-        statistics.value.erosionCV || 0,
-        "%",
-    ]);
-    csvData.push(["Risk Level", statistics.value.riskLevel || "N/A", ""]);
-    csvData.push([]);
+        csvData.push([`Area ${index + 1}`]);
+        csvData.push(["Name", areaName]);
+        csvData.push([
+            "Type",
+            entry.areaType
+                ? entry.areaType.charAt(0).toUpperCase() + entry.areaType.slice(1)
+                : "N/A",
+        ]);
+        csvData.push(["Period", entry.periodLabel || currentPeriodLabel.value]);
 
-    // Additional Metrics
-    if (statistics.value.bareSoilFrequency) {
-        csvData.push([
-            "Bare Soil Frequency",
-            statistics.value.bareSoilFrequency,
-            "%",
-        ]);
-    }
-    if (statistics.value.sustainabilityFactor) {
-        csvData.push([
-            "Sustainability Factor",
-            statistics.value.sustainabilityFactor,
-            "",
-        ]);
-    }
-    if (statistics.value.rainfallSlope) {
-        csvData.push([
-            "Rainfall Trend",
-            statistics.value.rainfallSlope,
-            "% per year",
-        ]);
-    }
-    if (statistics.value.rainfallCV) {
-        csvData.push([
-            "Rainfall Variability",
-            statistics.value.rainfallCV,
-            "%",
-        ]);
-    }
-    csvData.push([]);
+        if (entry.statistics?.riskLevel) {
+            csvData.push(["Risk Level", entry.statistics.riskLevel]);
+        }
 
-    // Severity Distribution
-    if (statistics.value.severityDistribution) {
-        csvData.push(["Severity Class Distribution"]);
-        csvData.push(["Class", "Area (ha)", "Percentage"]);
-        statistics.value.severityDistribution.forEach((item) => {
-            csvData.push([
-                item.class,
-                item.area,
-                `${item.percentage.toFixed(1)}%`,
-            ]);
-        });
         csvData.push([]);
-    }
 
-    // RUSLE Factors
-    if (statistics.value.rusleFactors) {
-        csvData.push(["RUSLE Factors"]);
-        csvData.push(["Factor", "Value", "Unit"]);
-        const factors = statistics.value.rusleFactors;
-        csvData.push([
-            "R-Factor (Rainfall Erosivity)",
-            factors.r || 0,
-            "MJ mm/(ha h yr)",
-        ]);
-        csvData.push([
-            "K-Factor (Soil Erodibility)",
-            factors.k || 0,
-            "t ha h/(ha MJ mm)",
-        ]);
-        csvData.push([
-            "LS-Factor (Topographic)",
-            factors.ls || 0,
-            "dimensionless",
-        ]);
-        csvData.push(["C-Factor (Cover Management)", factors.c || 0, "0-1"]);
-        csvData.push(["P-Factor (Support Practice)", factors.p || 0, "0-1"]);
-    }
+        if (entry.statistics) {
+            const stats = entry.statistics;
+            const formatNumber = (value, digits = 2) => {
+                if (value === null || value === undefined || isNaN(value)) {
+                    return "0";
+                }
+                return Number(value).toFixed(digits);
+            };
 
-    // Convert to CSV string
+            csvData.push(["Erosion Metrics"]);
+            csvData.push(["Metric", "Value", "Unit"]);
+            csvData.push([
+                "Mean Erosion Rate",
+                formatNumber(stats.meanErosionRate, 2),
+                "t/ha/yr",
+            ]);
+            csvData.push([
+                "Min Erosion Rate",
+                formatNumber(stats.minErosionRate, 2),
+                "t/ha/yr",
+            ]);
+            csvData.push([
+                "Max Erosion Rate",
+                formatNumber(stats.maxErosionRate, 2),
+                "t/ha/yr",
+            ]);
+            csvData.push([
+                "Coefficient of Variation",
+                formatNumber(stats.erosionCV, 1),
+                "%",
+            ]);
+            csvData.push([]);
+
+            csvData.push(["Rainfall Metrics"]);
+            csvData.push(["Metric", "Value", "Unit"]);
+            csvData.push([
+                "Rainfall Trend",
+                formatNumber(stats.rainfallSlope, 2),
+                "% per year",
+            ]);
+            csvData.push([
+                "Rainfall Variability",
+                formatNumber(stats.rainfallCV, 1),
+                "%",
+            ]);
+            csvData.push([]);
+
+            if (stats.bareSoilFrequency !== undefined) {
+                csvData.push([
+                    "Bare Soil Frequency",
+                    formatNumber(stats.bareSoilFrequency, 1),
+                    "%",
+                ]);
+            }
+            if (stats.sustainabilityFactor !== undefined) {
+                csvData.push([
+                    "Sustainability Factor",
+                    formatNumber(stats.sustainabilityFactor, 2),
+                    "",
+                ]);
+            }
+            csvData.push([]);
+
+            if (Array.isArray(stats.severityDistribution) && stats.severityDistribution.length) {
+                csvData.push(["Area by Severity Class"]);
+                csvData.push(["Class", "Area (ha)", "Percentage"]);
+                stats.severityDistribution.forEach((item) => {
+                    csvData.push([
+                        item.class,
+                        item.area ?? 0,
+                        item.percentage !== undefined
+                            ? `${formatNumber(item.percentage, 1)}%`
+                            : "0.0%",
+                    ]);
+                });
+                csvData.push([]);
+            }
+
+            if (Array.isArray(stats.topErodingAreas) && stats.topErodingAreas.length) {
+                csvData.push(["Top Eroding Areas"]);
+                csvData.push(["Name", "Erosion (t/ha/yr)"]);
+                stats.topErodingAreas.forEach((area) => {
+                    csvData.push([
+                        area.name || area.name_en || area.name_tj || "Unknown",
+                        area.erosion || area.erosion_rate || area.mean_erosion_rate || 0,
+                    ]);
+                });
+                csvData.push([]);
+            }
+
+            if (stats.rusleFactors) {
+                const factors = stats.rusleFactors;
+                csvData.push(["RUSLE Factors"]);
+                csvData.push(["Factor", "Value", "Unit"]);
+                csvData.push([
+                    "R-Factor (Rainfall Erosivity)",
+                    factors.r ?? 0,
+                    "MJ mm/(ha h yr)",
+                ]);
+                csvData.push([
+                    "K-Factor (Soil Erodibility)",
+                    factors.k ?? 0,
+                    "t ha h/(ha MJ mm)",
+                ]);
+                csvData.push([
+                    "LS-Factor (Topographic)",
+                    factors.ls ?? 0,
+                    "dimensionless",
+                ]);
+                csvData.push([
+                    "C-Factor (Cover Management)",
+                    factors.c ?? 0,
+                    "0-1",
+                ]);
+                csvData.push([
+                    "P-Factor (Support Practice)",
+                    factors.p ?? 0,
+                    "0-1",
+                ]);
+                csvData.push([]);
+            }
+        }
+
+        if (index < areaStatistics.value.length - 1) {
+            csvData.push([]);
+        }
+    });
+
     const csvString = csvData.map((row) => row.join(",")).join("\n");
 
-    // Create blob and download
     const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
     link.setAttribute(
         "download",
-        `rusle-statistics-${selectedArea.value?.name_en || "tajikistan"}-${
-            currentPeriodLabel.value.replace(/\s+/g, "-")
-        }-${new Date().toISOString().split("T")[0]}.csv`
+        `rusle-statistics-${currentPeriodLabel.value.replace(/\s+/g, "-")}-${new Date()
+            .toISOString()
+            .split("T")[0]}.csv`
     );
     link.style.visibility = "hidden";
     document.body.appendChild(link);
@@ -1840,7 +1923,6 @@ const loadCountryWideData = async () => {
                     body: JSON.stringify({
                         area_type: "district",
                         area_id: district.id,
-                        year: currentEndYear.value,
                         start_year: currentStartYear.value,
                         end_year: currentEndYear.value,
                         period: "annual",

@@ -28,6 +28,10 @@ class PrecomputedErosionMap extends Model
         'area_id' => 'integer'
     ];
 
+    protected $appends = [
+        'period_label',
+    ];
+
     /**
      * Check if the precomputed map is available and accessible
      */
@@ -38,7 +42,8 @@ class PrecomputedErosionMap extends Model
         }
 
         // Check if tiles directory exists
-        $tilesDir = storage_path("rusle-tiles/tiles/{$this->area_type}_{$this->area_id}/{$this->year}");
+        $period = $this->period_label;
+        $tilesDir = storage_path("rusle-tiles/tiles/{$this->area_type}_{$this->area_id}/{$period}");
         return file_exists($tilesDir) && is_dir($tilesDir);
     }
 
@@ -94,7 +99,28 @@ class PrecomputedErosionMap extends Model
     {
         // Generate URL pattern manually with placeholders
         $baseUrl = url('/api/erosion/tiles');
-        return "{$baseUrl}/{$this->area_type}/{$this->area_id}/{$this->year}/{z}/{x}/{y}.png";
+        $period = $this->period_label;
+        return "{$baseUrl}/{$this->area_type}/{$this->area_id}/{$period}/{z}/{x}/{y}.png";
+    }
+
+    public function getPeriodLabelAttribute(): string
+    {
+        $periodData = $this->metadata['period'] ?? null;
+
+        if (is_array($periodData)) {
+            if (!empty($periodData['label'])) {
+                return (string) $periodData['label'];
+            }
+
+            $start = $periodData['start_year'] ?? $this->year;
+            $end = $periodData['end_year'] ?? $this->year;
+
+            if ($start && $end && $start !== $end) {
+                return "{$start}-{$end}";
+            }
+        }
+
+        return (string) $this->year;
     }
 }
 

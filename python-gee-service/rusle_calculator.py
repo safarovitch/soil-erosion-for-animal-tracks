@@ -5,6 +5,7 @@ Implements all RUSLE factors and erosion computation for Tajikistan
 import ee
 import logging
 import math
+import numpy as np
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from gee_service import gee_service
@@ -118,6 +119,39 @@ class RUSLECalculator:
             
         except Exception as e:
             logger.error(f"Failed to compute R-factor: {str(e)}")
+            raise
+    
+    def compute_r_factor_range(self, start_year, end_year, geometry=None):
+        """
+        Compute R-Factor using mean annual rainfall over a multi-year range.
+        Args:
+            start_year: Inclusive start year
+            end_year: Inclusive end year (must be >= start_year)
+            geometry: Optional geometry to clip/filter collections
+        """
+        if end_year < start_year:
+            raise ValueError("end_year must be greater than or equal to start_year")
+        
+        try:
+            start_date = f'{start_year}-01-01'
+            end_date = f'{end_year + 1}-01-01'
+            years = max(1, (end_year - start_year + 1))
+            
+            chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
+                .filterDate(start_date, end_date) \
+                .select('precipitation')
+            chirps = self._filter_collection(chirps, geometry)
+            
+            total_precip = chirps.sum().toFloat()
+            mean_precip = total_precip.divide(years)
+            
+            r_factor = mean_precip.multiply(0.562).subtract(8.12)
+            r_factor = r_factor.max(0)
+            r_factor = self._clip_image(r_factor, geometry)
+            
+            return r_factor.rename('R_factor')
+        except Exception as e:
+            logger.error(f"Failed to compute range-based R-factor: {str(e)}")
             raise
     
     def compute_k_factor(self, geometry=None, structure_code=2, permeability_code=3):
@@ -247,7 +281,7 @@ class RUSLECalculator:
             logger.error(f"Failed to compute P-factor: {str(e)}")
             raise
     
-    def compute_rusle(self, year, geometry, scale=30, compute_stats=True):
+    def compute_rusle(self, year, geometry, scale=30, compute_stats=True, r_factor_image=None):
         """
         Compute full RUSLE erosion rate
         A = R * K * LS * C * P
@@ -263,7 +297,10 @@ class RUSLECalculator:
             logger.info(f"Computing RUSLE for year {year} at {scale}m resolution")
             
             # Compute all factors
-            r_factor = self.compute_r_factor(year, geometry)
+            if r_factor_image is not None:
+                r_factor = self._clip_image(r_factor_image, geometry)
+            else:
+                r_factor = self.compute_r_factor(year, geometry)
             k_factor = self.compute_k_factor(geometry)
             ls_factor = self.compute_ls_factor(geometry)
             c_factor = self.compute_c_factor(year, geometry)
@@ -312,6 +349,188 @@ class RUSLECalculator:
             
         except Exception as e:
             logger.error(f"Failed to compute RUSLE: {str(e)}")
+            raise
+    
+    def compute_rainfall_statistics(self, start_year, end_year, geometry, scale=5000):
+        """
+        Compute rainfall statistics for a multi-year range.
+        Returns:
+            dict containing:
+                - mean_annual_rainfall_mm
+                - trend_mm_per_year (slope)
+                - coefficient_of_variation_percent
+                - yearly_totals_mm (list of {year, mean_precip})
+        """
+        if geometry is None:
+            raise ValueError("geometry is required to compute rainfall statistics")
+        if end_year < start_year:
+            raise ValueError("end_year must be greater than or equal to start_year")
+        
+        try:
+            years_sequence = ee.List.sequence(start_year, end_year)
+            
+            def annual_total(year):
+                year = ee.Number(year)
+                start = ee.Date.fromYMD(year, 1, 1)
+                end = start.advance(1, 'year')
+                
+                collection = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
+                    .filterDate(start, end) \
+                    .select('precipitation')
+                collection = self._filter_collection(collection, geometry)
+                
+                total = collection.sum().toFloat()
+                return total.set('year', year)
+            
+            annual_collection = ee.ImageCollection(years_sequence.map(annual_total))
+            
+            def image_to_feature(image):
+                reduction = image.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=geometry,
+                    scale=scale,
+                    bestEffort=True,
+                    maxPixels=1e13
+                )
+                return ee.Feature(None, {
+                    'year': image.get('year'),
+                    'mean_precip': reduction.get('precipitation')
+                })
+            
+            rainfall_series = ee.FeatureCollection(annual_collection.map(image_to_feature)).getInfo()
+            features = rainfall_series.get('features', []) if rainfall_series else []
+            
+            yearly_values = []
+            for feature in features:
+                properties = feature.get('properties', {})
+                year = properties.get('year')
+                mean_precip = properties.get('mean_precip')
+                if year is None or mean_precip is None:
+                    continue
+                try:
+                    yearly_values.append({
+                        'year': int(round(year)),
+                        'mean_precip': float(mean_precip)
+                    })
+                except (TypeError, ValueError):
+                    continue
+            
+            yearly_values.sort(key=lambda item: item['year'])
+            
+            if not yearly_values:
+                return {
+                    'mean_annual_rainfall_mm': 0.0,
+                    'trend_mm_per_year': 0.0,
+                    'coefficient_of_variation_percent': 0.0,
+                    'yearly_totals_mm': []
+                }
+            
+            years = np.array([item['year'] for item in yearly_values], dtype=float)
+            rainfall_vals = np.array([item['mean_precip'] for item in yearly_values], dtype=float)
+            
+            mean_rainfall = float(np.mean(rainfall_vals))
+            std_rainfall = float(np.std(rainfall_vals))
+            cv_percent = float((std_rainfall / mean_rainfall) * 100) if mean_rainfall > 0 else 0.0
+            
+            trend_slope = 0.0
+            if years.size >= 2:
+                slope, _ = np.polyfit(years, rainfall_vals, 1)
+                trend_slope = float(slope)
+            
+            return {
+                'mean_annual_rainfall_mm': round(mean_rainfall, 2),
+                'trend_mm_per_year': round(trend_slope, 4),
+                'coefficient_of_variation_percent': round(cv_percent, 2),
+                'yearly_totals_mm': yearly_values
+            }
+        except Exception as e:
+            logger.error(f"Failed to compute rainfall statistics: {str(e)}", exc_info=True)
+            raise
+    
+    def compute_erosion_class_breakdown(self, soil_loss_image, geometry, scale=100):
+        """
+        Compute percentage area for predefined erosion classes.
+        Classes:
+            - very_low: 0–5 t/ha/yr
+            - low: 5–15 t/ha/yr
+            - moderate: 15–30 t/ha/yr
+            - severe: 30–50 t/ha/yr
+            - excessive: >50 t/ha/yr
+        Returns dict with percentages and area (hectares) per class.
+        """
+        if geometry is None:
+            raise ValueError("geometry is required to compute erosion class breakdown")
+        
+        try:
+            pixel_area = ee.Image.pixelArea().rename('area')
+            valid_mask = soil_loss_image.gte(0)
+            total_area = ee.Number(
+                pixel_area.updateMask(valid_mask).reduceRegion(
+                    reducer=ee.Reducer.sum(),
+                    geometry=geometry,
+                    scale=scale,
+                    bestEffort=True,
+                    maxPixels=1e13
+                ).get('area')
+            )
+            
+            def class_area(lower, upper):
+                mask = soil_loss_image.gte(lower)
+                if upper is not None:
+                    mask = mask.And(soil_loss_image.lt(upper))
+                return ee.Number(
+                    pixel_area.updateMask(mask).reduceRegion(
+                        reducer=ee.Reducer.sum(),
+                        geometry=geometry,
+                        scale=scale,
+                        bestEffort=True,
+                        maxPixels=1e13
+                    ).get('area')
+                )
+            
+            areas_dict = ee.Dictionary({
+                'total': total_area,
+                'very_low': class_area(0, 5),
+                'low': class_area(5, 15),
+                'moderate': class_area(15, 30),
+                'severe': class_area(30, 50),
+                'excessive': class_area(50, None)
+            }).getInfo()
+            
+            total_area_m2 = float(areas_dict.get('total') or 0.0)
+            if total_area_m2 <= 0:
+                zero_result = {
+                    'percentage': 0.0,
+                    'area_hectares': 0.0
+                }
+                return {
+                    'very_low': zero_result,
+                    'low': zero_result,
+                    'moderate': zero_result,
+                    'severe': zero_result,
+                    'excessive': zero_result,
+                    'total_area_hectares': 0.0
+                }
+            
+            def to_output(key):
+                area_m2 = float(areas_dict.get(key) or 0.0)
+                area_ha = area_m2 / 10000.0
+                percentage = (area_m2 / total_area_m2) * 100.0 if total_area_m2 > 0 else 0.0
+                return {
+                    'percentage': round(percentage, 2),
+                    'area_hectares': round(area_ha, 2)
+                }
+            
+            return {
+                'very_low': to_output('very_low'),
+                'low': to_output('low'),
+                'moderate': to_output('moderate'),
+                'severe': to_output('severe'),
+                'excessive': to_output('excessive'),
+                'total_area_hectares': round(total_area_m2 / 10000.0, 2)
+            }
+        except Exception as e:
+            logger.error(f"Failed to compute erosion class breakdown: {str(e)}", exc_info=True)
             raise
     
     def compute_detailed_grid(self, year, geometry, grid_size=10, bbox=None, geojson=None):

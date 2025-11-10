@@ -28,7 +28,8 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district,country',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:1993',
+            'start_year' => 'required|integer|min:1993',
+            'end_year' => 'required|integer|min:1993|gte:start_year',
             'period' => 'required|string|in:annual,monthly,seasonal',
         ]);
 
@@ -47,11 +48,20 @@ class ErosionController extends Controller
                 ], 503); // Service Unavailable
             }
 
+            $startYear = (int) $request->start_year;
+            $endYear = (int) $request->end_year;
+            $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
+
             // Log the query for analytics
-            $this->logQuery($request, $area, 'erosion_compute');
+            $this->logQuery($request, $area, 'erosion_compute', [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period' => $request->period,
+                'period_label' => $periodLabel,
+            ]);
 
             // Compute erosion data directly from GEE
-            $data = $this->geeService->computeErosionForArea($area, $request->year, $request->period);
+            $data = $this->geeService->computeErosionForArea($area, $startYear, $endYear, $request->period);
 
             return response()->json([
                 'success' => true,
@@ -61,8 +71,10 @@ class ErosionController extends Controller
                     'id' => $area->id,
                     'name' => $area->name_en,
                 ],
-                'year' => $request->year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'period' => $request->period,
+                'period_label' => $periodLabel,
             ]);
         } catch (GoogleEarthEngineException $e) {
             Log::error('Erosion computation failed', [
@@ -102,14 +114,19 @@ class ErosionController extends Controller
         $request->validate([
             'area_type' => 'required|in:region,district',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:1993',
+            'start_year' => 'required|integer|min:1993',
+            'end_year' => 'required|integer|min:1993|gte:start_year',
             'period' => 'required|string|in:annual,monthly,seasonal',
         ]);
+
+        $startYear = (int) $request->start_year;
+        $endYear = (int) $request->end_year;
 
         $cached = ErosionCache::findByParameters(
             $request->area_type === 'region' ? Region::class : District::class,
             $request->area_id,
-            $request->year,
+            $startYear,
+            $endYear,
             $request->period
         );
 
@@ -122,6 +139,8 @@ class ErosionController extends Controller
             'data' => $cached->data,
             'cached_at' => $cached->created_at,
             'expires_at' => $cached->expires_at,
+            'start_year' => $startYear,
+            'end_year' => $endYear,
         ]);
     }
 
@@ -191,7 +210,8 @@ class ErosionController extends Controller
     {
         $request->validate([
             'geometry' => 'required|array',
-            'year' => 'required|integer|min:1993',
+            'start_year' => 'required|integer|min:1993',
+            'end_year' => 'required|integer|min:1993|gte:start_year',
         ]);
 
         try {
@@ -205,19 +225,26 @@ class ErosionController extends Controller
             }
 
             // Log the query
+            $startYear = (int) $request->start_year;
+            $endYear = (int) $request->end_year;
+            $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
+
             $this->logQuery($request, null, 'geometry_analysis', [
                 'geometry' => $request->geometry,
-                'year' => $request->year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
             ]);
 
             // Analyze the geometry directly with GEE
-            $data = $this->geeService->analyzeGeometry($request->geometry, $request->year);
+            $data = $this->geeService->analyzeGeometry($request->geometry, $startYear, $endYear);
 
             return response()->json([
                 'success' => true,
                 'data' => $data,
                 'geometry' => $request->geometry,
-                'year' => $request->year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period_label' => $periodLabel,
             ]);
         } catch (GoogleEarthEngineException $e) {
             Log::error('Geometry analysis failed', [

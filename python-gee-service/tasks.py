@@ -37,14 +37,15 @@ def _post_to_laravel(path, payload, timeout=10):
 
 
 @celery_app.task(bind=True, name='tasks.generate_erosion_map')
-def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
+def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bbox, end_year=None):
     """
     Background task to generate erosion map (GeoTIFF + tiles)
     
     Args:
         area_type: 'region' or 'district'
         area_id: ID of the area
-        year: Year to compute
+        start_year: Start year (or single year) to compute
+        end_year: Optional inclusive end year (defaults to start year)
         geometry: GeoJSON geometry dict
         bbox: Bounding box [minLon, minLat, maxLon, maxLat]
     
@@ -52,8 +53,11 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         dict: Result with status, paths, and statistics
     """
     try:
+        end_year = end_year if end_year is not None else start_year
+        period_label = str(start_year) if end_year == start_year else f"{start_year}-{end_year}"
+        
         logger.info(f"=== Starting erosion map generation task ===")
-        logger.info(f"Area: {area_type} {area_id}, Year: {year}")
+        logger.info(f"Area: {area_type} {area_id}, Period: {period_label}")
         logger.info(f"Task ID: {self.request.id}")
         
         # Notify Laravel that task has started
@@ -62,7 +66,10 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
                 'task_id': self.request.id,
                 'area_type': area_type,
                 'area_id': area_id,
-                'year': year
+                'year': start_year,  # Legacy field for backward compatibility
+                'start_year': start_year,
+                'end_year': end_year,
+                'period_label': period_label
             }
             _post_to_laravel('/api/erosion/task-started', callback_data)
             logger.info("Task started callback acknowledged by Laravel")
@@ -77,7 +84,9 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
                 'progress': 0,
                 'area_type': area_type,
                 'area_id': area_id,
-                'year': year
+                'start_year': start_year,
+                'end_year': end_year,
+                'period_label': period_label
             }
         )
         
@@ -102,7 +111,12 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         metadata = {}
 
         geotiff_path, statistics, metadata = raster_gen.generate_geotiff(
-            area_type, area_id, year, geometry, bbox
+            area_type,
+            area_id,
+            start_year,
+            geometry,
+            bbox,
+            end_year=end_year
         )
         
         logger.info(f"✓ GeoTIFF generated: {geotiff_path}")
@@ -121,8 +135,12 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
         original_geometry = geometry  # Already in GeoJSON format from task args
         
         tiles_path = tile_gen.generate_tiles(
-            geotiff_path, area_type, area_id, year,
-            geometry_json=original_geometry  # Pass geometry for boundary clipping
+            geotiff_path,
+            area_type,
+            area_id,
+            start_year,
+            geometry_json=original_geometry,  # Pass geometry for boundary clipping
+            end_year=end_year
         )
         
         logger.info(f"✓ Tiles generated: {tiles_path}")
@@ -139,7 +157,10 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
                 'task_id': self.request.id,
                 'area_type': area_type,
                 'area_id': area_id,
-                'year': year,
+                'year': start_year,  # Legacy field for backward compatibility
+                'start_year': start_year,
+                'end_year': end_year,
+                'period_label': period_label,
                 'geotiff_path': geotiff_path,
                 'tiles_path': tiles_path,
                 'statistics': statistics,
@@ -159,7 +180,9 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
             'metadata': metadata,
             'area_type': area_type,
             'area_id': area_id,
-            'year': year
+            'start_year': start_year,
+            'end_year': end_year,
+            'period_label': period_label
         }
         
         logger.info(f"=== Task completed successfully ===")
@@ -180,7 +203,10 @@ def generate_erosion_map_task(self, area_type, area_id, year, geometry, bbox):
                 'task_id': self.request.id,
                 'area_type': area_type,
                 'area_id': area_id,
-                'year': year,
+                'year': start_year,
+                'start_year': start_year,
+                'end_year': end_year,
+                'period_label': period_label,
                 'error': error_msg,
                 'error_type': error_type,
                 'metadata': metadata

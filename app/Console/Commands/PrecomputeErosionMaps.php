@@ -65,17 +65,19 @@ class PrecomputeErosionMaps extends Command
             return 1;
         }
 
-        $yearRange = range($startYear, $endYear);
+        $periodLabel = $startYear === $endYear
+            ? (string) $startYear
+            : "{$startYear}-{$endYear}";
         $type = $this->option('type');
         $force = $this->option('force');
 
         $this->info("Configuration:");
-        $this->line("  Years: " . implode(', ', $yearRange));
+        $this->line("  Period: {$periodLabel}");
         $this->line("  Type: {$type}");
         $this->line("  Force recompute: " . ($force ? 'Yes' : 'No'));
         $this->newLine();
 
-        if (!$this->confirm('This will queue ' . count($yearRange) . ' years for each area. Continue?', true)) {
+        if (!$this->confirm("This will queue one job per area for period {$periodLabel}. Continue?", true)) {
             $this->info('Cancelled.');
             return 0;
         }
@@ -89,30 +91,34 @@ class PrecomputeErosionMaps extends Command
             $this->info("Processing {$regions->count()} regions...");
             $this->newLine();
 
-            $progressBar = $this->output->createProgressBar($regions->count() * count($yearRange));
+            $progressBar = $this->output->createProgressBar($regions->count());
             $progressBar->start();
 
             foreach ($regions as $region) {
-                foreach ($yearRange as $year) {
-                    // Check if already exists and not forcing
-                    if (!$force) {
-                        $existing = PrecomputedErosionMap::where([
-                            'area_type' => 'region',
-                            'area_id' => $region->id,
-                            'year' => $year
-                        ])->whereIn('status', ['completed', 'processing'])->first();
+                // Check if already exists and not forcing
+                if (!$force) {
+                    $existing = PrecomputedErosionMap::where([
+                        'area_type' => 'region',
+                        'area_id' => $region->id,
+                        'year' => $startYear
+                    ])
+                    ->when(
+                        $endYear !== $startYear,
+                        fn ($query) => $query->where('metadata->period->end_year', $endYear)
+                    )
+                    ->whereIn('status', ['completed', 'processing'])
+                    ->first();
 
-                        if ($existing) {
-                            $skipped++;
-                            $progressBar->advance();
-                            continue;
-                        }
+                    if ($existing) {
+                        $skipped++;
+                        $progressBar->advance();
+                        continue;
                     }
-
-                    $service->getOrQueueMap('region', $region->id, $year);
-                    $totalJobs++;
-                    $progressBar->advance();
                 }
+
+                $service->getOrQueueMap('region', $region->id, $startYear, $endYear);
+                $totalJobs++;
+                $progressBar->advance();
             }
 
             $progressBar->finish();
@@ -125,30 +131,34 @@ class PrecomputeErosionMaps extends Command
             $this->info("Processing {$districts->count()} districts...");
             $this->newLine();
 
-            $progressBar = $this->output->createProgressBar($districts->count() * count($yearRange));
+            $progressBar = $this->output->createProgressBar($districts->count());
             $progressBar->start();
 
             foreach ($districts as $district) {
-                foreach ($yearRange as $year) {
-                    // Check if already exists and not forcing
-                    if (!$force) {
-                        $existing = PrecomputedErosionMap::where([
-                            'area_type' => 'district',
-                            'area_id' => $district->id,
-                            'year' => $year
-                        ])->whereIn('status', ['completed', 'processing'])->first();
+                // Check if already exists and not forcing
+                if (!$force) {
+                    $existing = PrecomputedErosionMap::where([
+                        'area_type' => 'district',
+                        'area_id' => $district->id,
+                        'year' => $startYear
+                    ])
+                    ->when(
+                        $endYear !== $startYear,
+                        fn ($query) => $query->where('metadata->period->end_year', $endYear)
+                    )
+                    ->whereIn('status', ['completed', 'processing'])
+                    ->first();
 
-                        if ($existing) {
-                            $skipped++;
-                            $progressBar->advance();
-                            continue;
-                        }
+                    if ($existing) {
+                        $skipped++;
+                        $progressBar->advance();
+                        continue;
                     }
-
-                    $service->getOrQueueMap('district', $district->id, $year);
-                    $totalJobs++;
-                    $progressBar->advance();
                 }
+
+                $service->getOrQueueMap('district', $district->id, $startYear, $endYear);
+                $totalJobs++;
+                $progressBar->advance();
             }
 
             $progressBar->finish();

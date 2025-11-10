@@ -131,14 +131,18 @@ class GoogleEarthEngineService
     /**
      * Compute erosion for a region or district.
      */
-    public function computeErosionForArea(Region|District $area, int $year, string $period = 'annual'): array
+    public function computeErosionForArea(Region|District $area, int $startYear, ?int $endYear = null, string $period = 'annual'): array
     {
+        $endYear = $endYear ?? $startYear;
+        $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
+
         // Check cache first
-        $cacheKey = $this->generateCacheKey($area, $year, $period);
+        $cacheKey = $this->generateCacheKey($area, $startYear, $endYear, $period);
         $cached = ErosionCache::findByParameters(
             get_class($area),
             $area->id,
-            $year,
+            $startYear,
+            $endYear,
             $period
         );
 
@@ -155,14 +159,17 @@ class GoogleEarthEngineService
             
             Log::info('Computing erosion via Python service', [
                 'area' => $area->name_en,
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'period' => $period
             ]);
             
             // Get all factors and soil erosion from Python service
             $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
                 'area_geometry' => $geometry,
-                'year' => $year,
+                'year' => $endYear, // Legacy compatibility
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'factors' => 'all',
                 'scale' => 100
             ]);
@@ -194,7 +201,7 @@ class GoogleEarthEngineService
             if (empty($factors)) {
                 throw GoogleEarthEngineException::noDataAvailable(
                     $area->name_en,
-                    $year,
+                    $endYear,
                     ['message' => 'No factor data returned from Python service']
                 );
             }
@@ -202,7 +209,7 @@ class GoogleEarthEngineService
             if (!$soilErosion) {
                 throw GoogleEarthEngineException::noDataAvailable(
                     $area->name_en,
-                    $year,
+                    $endYear,
                     ['message' => 'No soil erosion data returned from Python service']
                 );
             }
@@ -218,7 +225,7 @@ class GoogleEarthEngineService
             if ($meanErosion === null || $minErosion === null || $maxErosion === null) {
                 throw GoogleEarthEngineException::noDataAvailable(
                     $area->name_en,
-                    $year,
+                    $endYear,
                     ['message' => 'Incomplete soil erosion statistics from Python service']
                 );
             }
@@ -227,6 +234,11 @@ class GoogleEarthEngineService
             
             $stats = [
                 'tiles' => null,
+                'period' => [
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'label' => $periodLabel,
+                ],
                 'statistics' => [
                     'mean_erosion_rate' => round($meanErosion, 2),
                     'min_erosion_rate' => round($minErosion, 2),
@@ -253,20 +265,22 @@ class GoogleEarthEngineService
             ];
             
             // Cache the result
-            $this->cacheResult($area, $year, $period, $stats);
+            $this->cacheResult($area, $startYear, $endYear, $period, $stats);
 
             return $stats;
         } catch (GoogleEarthEngineException $e) {
             Log::error('GEE computation error', [
                 'area' => $area->name_en,
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
         } catch (Exception $e) {
             Log::error('GEE computation error', [
                 'area' => $area->name_en,
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'error' => $e->getMessage(),
             ]);
             throw GoogleEarthEngineException::apiRequestFailed(
@@ -283,7 +297,7 @@ class GoogleEarthEngineService
      */
     public function getBareSoilFrequency(Region|District $area, int $year): array
     {
-        return $this->computeErosionForArea($area, $year, 'annual');
+        return $this->computeErosionForArea($area, $year, $year, 'annual');
     }
 
     /**
@@ -291,7 +305,7 @@ class GoogleEarthEngineService
      */
     public function getSustainabilityFactor(Region|District $area, int $year): array
     {
-        return $this->computeErosionForArea($area, $year, 'annual');
+        return $this->computeErosionForArea($area, $year, $year, 'annual');
     }
 
     /**
@@ -303,7 +317,7 @@ class GoogleEarthEngineService
 
         for ($year = $startYear; $year <= $endYear; $year++) {
             try {
-                $data = $this->computeErosionForArea($area, $year, 'annual');
+                $data = $this->computeErosionForArea($area, $year, $year, 'annual');
                 $timeSeriesData[$year] = $data;
             } catch (Exception $e) {
                 Log::warning("Failed to get data for year {$year}", ['error' => $e->getMessage()]);
@@ -317,8 +331,10 @@ class GoogleEarthEngineService
     /**
      * Analyze user-drawn geometry.
      */
-    public function analyzeGeometry(array $geometry, int $year): array
+    public function analyzeGeometry(array $geometry, int $startYear, ?int $endYear = null): array
     {
+        $endYear = $endYear ?? $startYear;
+
         try {
             // Get Python GEE service URL
             $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
@@ -326,7 +342,9 @@ class GoogleEarthEngineService
             // Call Python GEE service
             $response = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/compute", [
                 'area_geometry' => $geometry,
-                'year' => $year
+                'year' => $endYear,
+                'start_year' => $startYear,
+                'end_year' => $endYear
             ]);
             
             if (!$response->successful()) {
@@ -348,6 +366,10 @@ class GoogleEarthEngineService
                 );
             }
             
+            $analysisData = $result['data'] ?? [];
+            $rainfallStatistics = $analysisData['rainfall_statistics'] ?? null;
+            $erosionBreakdown = $analysisData['erosion_class_breakdown'] ?? null;
+            
             // Create a temporary area object for compatibility
             $tempArea = new \stdClass();
             $tempArea->area_km2 = $this->calculateAreaFromGeometry($geometry);
@@ -356,7 +378,9 @@ class GoogleEarthEngineService
             // Get individual factors from Python service
             $factorsResponse = Http::timeout(600)->post("{$pythonServiceUrl}/api/rusle/factors", [
                 'area_geometry' => $geometry,
-                'year' => $year,
+                'year' => $endYear,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'factors' => 'all',
                 'scale' => 100
             ]);
@@ -386,21 +410,26 @@ class GoogleEarthEngineService
                 'c_factor' => $factorsData['c']['mean'] ?? null,
                 'p_factor' => $factorsData['p']['mean'] ?? null,
                 'area_km2' => $tempArea->area_km2,
-                'statistics' => $result['data']['statistics'],
+                'statistics' => $analysisData['statistics'] ?? null,
                 'factors' => $factorsData,
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'rainfall_statistics' => $rainfallStatistics,
+                'erosion_class_breakdown' => $erosionBreakdown,
                 'source' => 'python_gee_service'
             ];
             
         } catch (GoogleEarthEngineException $e) {
             Log::error('GEE geometry analysis error', [
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'error' => $e->getMessage()
             ]);
             throw $e;
         } catch (Exception $e) {
             Log::error('GEE geometry analysis error', [
-                'year' => $year,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
                 'error' => $e->getMessage()
             ]);
             throw GoogleEarthEngineException::apiRequestFailed(
@@ -1467,22 +1496,22 @@ class GoogleEarthEngineService
     /**
      * Generate cache key for the computation.
      */
-    private function generateCacheKey(Region|District $area, int $year, string $period): string
+    private function generateCacheKey(Region|District $area, int $startYear, int $endYear, string $period): string
     {
-        return ErosionCache::generateCacheKey(get_class($area), $area->id, $year, $period);
+        return ErosionCache::generateCacheKey(get_class($area), $area->id, $startYear, $endYear, $period);
     }
 
     /**
      * Cache the computation result.
      */
-    private function cacheResult(Region|District $area, int $year, string $period, array $data): void
+    private function cacheResult(Region|District $area, int $startYear, int $endYear, string $period, array $data): void
     {
         ErosionCache::create([
             'cacheable_type' => get_class($area),
             'cacheable_id' => $area->id,
-            'year' => $year,
+            'year' => $startYear,
             'period' => $period,
-            'cache_key' => $this->generateCacheKey($area, $year, $period),
+            'cache_key' => $this->generateCacheKey($area, $startYear, $endYear, $period),
             'data' => $data,
             'expires_at' => now()->addDays(30), // Cache for 30 days
         ]);

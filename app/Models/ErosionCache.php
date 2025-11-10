@@ -44,20 +44,21 @@ class ErosionCache extends Model
     /**
      * Create a cache key for the given parameters.
      */
-    public static function generateCacheKey(string $type, int $id, int $year, string $period): string
+    public static function generateCacheKey(string $type, int $id, int $startYear, int $endYear, string $period): string
     {
-        return "erosion_{$type}_{$id}_{$year}_{$period}";
+        return "erosion_{$type}_{$id}_{$startYear}_{$endYear}_{$period}";
     }
 
     /**
      * Find cache entry by parameters.
      */
-    public static function findByParameters(string $type, int $id, int $year, string $period): ?self
+    public static function findByParameters(string $type, int $id, int $startYear, int $endYear, string $period): ?self
     {
+        $cacheKey = static::generateCacheKey($type, $id, $startYear, $endYear, $period);
+
         return static::where('cacheable_type', $type)
             ->where('cacheable_id', $id)
-            ->where('year', $year)
-            ->where('period', $period)
+            ->where('cache_key', $cacheKey)
             ->where(function ($query) {
                 $query->whereNull('expires_at')
                     ->orWhere('expires_at', '>', now());

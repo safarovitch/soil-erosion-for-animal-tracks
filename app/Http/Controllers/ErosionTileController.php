@@ -20,10 +20,10 @@ class ErosionTileController extends Controller
     /**
      * Serve a map tile
      */
-    public function serveTile($areaType, $areaId, $year, $z, $x, $y)
+    public function serveTile($areaType, $areaId, $period, $z, $x, $y)
     {
         $tilePath = storage_path(
-            "rusle-tiles/tiles/{$areaType}_{$areaId}/{$year}/{$z}/{$x}/{$y}.png"
+            "rusle-tiles/tiles/{$areaType}_{$areaId}/{$period}/{$z}/{$x}/{$y}.png"
         );
 
         if (!file_exists($tilePath)) {
@@ -41,16 +41,42 @@ class ErosionTileController extends Controller
      */
     public function checkAvailability(Request $request)
     {
+        $minYear = (int) config('earthengine.defaults.start_year', 1993);
+        $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
+
         $validated = $request->validate([
             'area_type' => 'required|in:region,district',
             'area_id' => 'required|integer',
-            'year' => 'required|integer|min:2015|max:2024'
+            'start_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
+            'end_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
+            'year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
         ]);
+
+        $startYear = $validated['start_year'] ?? $validated['year'] ?? null;
+        $endYear = $validated['end_year'] ?? $startYear ?? null;
+
+        if ($startYear === null || $endYear === null) {
+            return response()->json([
+                'status' => 'error',
+                'error' => 'start_year (or year) and end_year are required'
+            ], 422);
+        }
+
+        $startYear = (int) $startYear;
+        $endYear = (int) $endYear;
+
+        if ($endYear < $startYear) {
+            return response()->json([
+                'status' => 'error',
+                'error' => 'end_year must be greater than or equal to start_year'
+            ], 422);
+        }
 
         $result = $this->service->getOrQueueMap(
             $validated['area_type'],
             $validated['area_id'],
-            $validated['year']
+            $startYear,
+            $endYear
         );
 
         return response()->json($result);
@@ -76,7 +102,7 @@ class ErosionTileController extends Controller
             Log::info('Task started callback received', [
                 'task_id' => $request->input('task_id'),
                 'area' => $request->input('area_type') . ' ' . $request->input('area_id'),
-                'year' => $request->input('year')
+                'period' => $request->input('period_label', $request->input('year'))
             ]);
             
             return response()->json([
@@ -107,7 +133,7 @@ class ErosionTileController extends Controller
             Log::info('Task completion callback received', [
                 'task_id' => $request->input('task_id'),
                 'area' => $request->input('area_type') . ' ' . $request->input('area_id'),
-                'year' => $request->input('year'),
+                'period' => $request->input('period_label', $request->input('year')),
                 'status' => $result['status'] ?? 'unknown'
             ]);
             
@@ -139,7 +165,7 @@ class ErosionTileController extends Controller
             Log::info('Task failure callback received', [
                 'task_id' => $request->input('task_id'),
                 'area' => $request->input('area_type') . ' ' . $request->input('area_id'),
-                'year' => $request->input('year'),
+                'period' => $request->input('period_label', $request->input('year')),
                 'error' => $request->input('error'),
                 'error_type' => $request->input('error_type')
             ]);
@@ -166,7 +192,9 @@ class ErosionTileController extends Controller
      */
     public function precomputeAll(Request $request)
     {
-        $years = range(2015, 2024);
+        $minYear = (int) config('earthengine.defaults.start_year', 1993);
+        $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
+        $years = range($minYear, $maxYear);
         $queued = [];
         $skipped = [];
 

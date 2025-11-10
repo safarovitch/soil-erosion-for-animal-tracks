@@ -257,99 +257,230 @@ const getSeverityColorClass = (className) => {
 }
 
 const createPieChart = () => {
-  if (!pieChartCanvas.value) return
+  if (!pieChartCanvas.value) {
+    console.warn('Pie chart canvas not available')
+    return
+  }
+
+  // Check if canvas is actually in DOM and has dimensions
+  if (!pieChartCanvas.value.parentElement || pieChartCanvas.value.offsetWidth === 0) {
+    console.warn('Pie chart canvas not visible or has no dimensions')
+    return
+  }
 
   if (pieChart) {
     pieChart.destroy()
+    pieChart = null
   }
 
   const ctx = pieChartCanvas.value.getContext('2d')
-  const data = severityDistribution.value
+  if (!ctx) {
+    console.error('Could not get 2d context from canvas')
+    return
+  }
 
-  pieChart = new Chart(ctx, {
-    type: 'pie',
-    data: {
-      labels: data.map(d => d.class),
-      datasets: [{
-        data: data.map(d => d.percentage),
-        backgroundColor: [
-          'rgba(34, 139, 34, 0.8)',
-          'rgba(255, 215, 0, 0.8)',
-          'rgba(255, 140, 0, 0.8)',
-          'rgba(220, 20, 60, 0.8)',
-          'rgba(139, 0, 0, 0.9)',
-        ],
-        borderWidth: 1,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      plugins: {
-        legend: {
-          position: 'right',
-        },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              return `${context.label}: ${context.parsed.toFixed(1)}%`
+  const data = severityDistribution.value
+  
+  // Ensure we have valid data structure
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    console.warn('No severity distribution data available')
+    // Create chart with zero data to show empty state
+    pieChart = new Chart(ctx, {
+      type: 'pie',
+      data: {
+        labels: ['No Data'],
+        datasets: [{
+          data: [100],
+          backgroundColor: ['rgba(200, 200, 200, 0.5)'],
+          borderWidth: 1,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'right',
+          },
+          tooltip: {
+            enabled: false
+          }
+        }
+      }
+    })
+    return
+  }
+
+  // Validate data structure
+  const validData = data.filter(d => d && d.class && typeof d.percentage === 'number')
+  
+  if (validData.length === 0) {
+    console.warn('No valid severity distribution data')
+    return
+  }
+
+  try {
+    pieChart = new Chart(ctx, {
+      type: 'pie',
+      data: {
+        labels: validData.map(d => d.class),
+        datasets: [{
+          data: validData.map(d => d.percentage),
+          backgroundColor: [
+            'rgba(34, 139, 34, 0.8)',
+            'rgba(255, 215, 0, 0.8)',
+            'rgba(255, 140, 0, 0.8)',
+            'rgba(220, 20, 60, 0.8)',
+            'rgba(139, 0, 0, 0.9)',
+          ].slice(0, validData.length),
+          borderWidth: 1,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'right',
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return `${context.label}: ${context.parsed.toFixed(1)}%`
+              }
             }
           }
         }
       }
-    }
-  })
+    })
+  } catch (error) {
+    console.error('Error creating pie chart:', error)
+  }
 }
 
 const createBarChart = () => {
-  if (!barChartCanvas.value) return
+  if (!barChartCanvas.value) {
+    console.warn('Bar chart canvas not available')
+    return
+  }
+
+  // Check if canvas is actually in DOM and has dimensions
+  if (!barChartCanvas.value.parentElement || barChartCanvas.value.offsetWidth === 0) {
+    console.warn('Bar chart canvas not visible or has no dimensions')
+    return
+  }
 
   if (barChart) {
     barChart.destroy()
+    barChart = null
   }
 
   const ctx = barChartCanvas.value.getContext('2d')
+  if (!ctx) {
+    console.error('Could not get 2d context from canvas')
+    return
+  }
   
-  // Mock data for top eroding areas (would come from backend)
-  const topAreas = props.statistics?.topErodingAreas || [
-    { name: 'District 1', erosion: 45 },
-    { name: 'District 2', erosion: 38 },
-    { name: 'District 3', erosion: 32 },
-    { name: 'District 4', erosion: 28 },
-    { name: 'District 5', erosion: 25 },
-  ]
+  // Get real data from statistics if available
+  let topAreas = []
+  
+  if (props.statistics && props.statistics.topErodingAreas) {
+    // Use real data from backend
+    topAreas = Array.isArray(props.statistics.topErodingAreas) 
+      ? props.statistics.topErodingAreas 
+      : []
+    
+    // Validate and filter valid entries
+    topAreas = topAreas.filter(area => 
+      area && 
+      (area.name || area.name_en || area.name_tj) && 
+      typeof (area.erosion || area.erosion_rate || area.mean_erosion_rate) === 'number'
+    ).map(area => ({
+      name: area.name || area.name_en || area.name_tj || 'Unknown',
+      erosion: area.erosion || area.erosion_rate || area.mean_erosion_rate || 0
+    }))
+  }
+  
+  // No mock data - only show real data or empty state
 
-  barChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: topAreas.map(d => d.name),
-      datasets: [{
-        label: 'Erosion Rate (t/ha/yr)',
-        data: topAreas.map(d => d.erosion),
-        backgroundColor: 'rgba(220, 20, 60, 0.7)',
-        borderColor: 'rgba(220, 20, 60, 1)',
-        borderWidth: 1,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      scales: {
-        y: {
-          beginAtZero: true,
-          title: {
-            display: true,
-            text: 'Erosion Rate (t/ha/yr)'
+  // If no data available, show empty state
+  if (topAreas.length === 0) {
+    try {
+      barChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['No Data Available'],
+          datasets: [{
+            label: 'Erosion Rate (t/ha/yr)',
+            data: [0],
+            backgroundColor: 'rgba(200, 200, 200, 0.5)',
+            borderColor: 'rgba(200, 200, 200, 0.8)',
+            borderWidth: 1,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Erosion Rate (t/ha/yr)'
+              }
+            }
+          },
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false
+            }
           }
         }
+      })
+    } catch (error) {
+      console.error('Error creating empty bar chart:', error)
+    }
+    return
+  }
+
+  try {
+    barChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: topAreas.map(d => d.name),
+        datasets: [{
+          label: 'Erosion Rate (t/ha/yr)',
+          data: topAreas.map(d => d.erosion),
+          backgroundColor: 'rgba(220, 20, 60, 0.7)',
+          borderColor: 'rgba(220, 20, 60, 1)',
+          borderWidth: 1,
+        }],
       },
-      plugins: {
-        legend: {
-          display: false,
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Erosion Rate (t/ha/yr)'
+            }
+          }
+        },
+        plugins: {
+          legend: {
+            display: false,
+          }
         }
       }
-    }
-  })
+    })
+  } catch (error) {
+    console.error('Error creating bar chart:', error)
+  }
 }
 
 const createLineChart = () => {
@@ -450,31 +581,37 @@ const exportCSV = () => {
 // Watchers
 watch(() => activeTab.value, async (newTab) => {
   await nextTick()
-  
-  if (newTab === 'distribution') {
-    createPieChart()
-  } else if (newTab === 'charts') {
-    createBarChart()
-    createLineChart()
-  }
+  // Add small delay to ensure DOM is fully updated
+  setTimeout(() => {
+    if (newTab === 'distribution') {
+      createPieChart()
+    } else if (newTab === 'charts') {
+      createBarChart()
+      createLineChart()
+    }
+  }, 100)
 })
 
 watch(() => props.statistics, () => {
-  if (activeTab.value === 'distribution') {
-    nextTick(() => createPieChart())
-  } else if (activeTab.value === 'charts') {
-    nextTick(() => {
+  // Add delay to ensure canvas is ready
+  setTimeout(() => {
+    if (activeTab.value === 'distribution') {
+      createPieChart()
+    } else if (activeTab.value === 'charts') {
       createBarChart()
       createLineChart()
-    })
-  }
+    }
+  }, 100)
 }, { deep: true })
 
 // Lifecycle
 onMounted(() => {
-  if (activeTab.value === 'distribution') {
-    nextTick(() => createPieChart())
-  }
+  // Wait for DOM to be fully ready
+  setTimeout(() => {
+    if (activeTab.value === 'distribution') {
+      createPieChart()
+    }
+  }, 200)
 })
 </script>
 

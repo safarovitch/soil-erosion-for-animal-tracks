@@ -38,7 +38,7 @@ const props = defineProps({
   details: String,
   duration: {
     type: Number,
-    default: 5000, // Auto-close after 5 seconds
+    default: 0, // 0 = persist until dismissed
   },
   show: Boolean,
 })

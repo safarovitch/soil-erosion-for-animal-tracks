@@ -84,7 +84,7 @@ Route::middleware('api')->prefix('erosion')->group(function () {
 // Erosion Tile System (Precomputed Maps)
 Route::prefix('erosion')->group(function () {
     // Serve map tiles
-    Route::get('/tiles/{area_type}/{area_id}/{year}/{z}/{x}/{y}.png', 
+    Route::get('/tiles/{area_type}/{area_id}/{period}/{z}/{x}/{y}.png', 
         [ErosionTileController::class, 'serveTile']
     )->name('erosion.tiles');
 

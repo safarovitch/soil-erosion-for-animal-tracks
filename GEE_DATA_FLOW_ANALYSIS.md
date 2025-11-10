@@ -189,6 +189,14 @@ if geometry_json:
 ### Dependencies Added:
 - `shapely>=2.0.0` (added to `requirements.txt`)
 
+## Decadal Tile Generation (2025 Update)
+
+- Python service now supports decade (or arbitrary multi-year) periods by computing a mean rainfall-based R-factor via `compute_r_factor_range()` and passing a custom factor into `compute_rusle()`.
+- `ErosionRasterGenerator.generate_geotiff()` accepts `end_year` and stores all outputs under `storage/rusle-tiles/geotiff/<area>/<start-end>/`, embedding rainfall statistics and erosion class breakdowns in metadata.
+- `MapTileGenerator.generate_tiles()` mirrors the same `<start-end>` directory naming. All Celery callbacks propagate `start_year`, `end_year`, and `period_label`.
+- Laravel’s tile API (`/api/erosion/check-availability`) now requires `start_year`/`end_year` and returns the `period_label`, keeping single-year logic available internally but hidden from the UI.
+- `PrecomputedErosionMap` exposes a derived `period_label` attribute so tile URLs and availability checks resolve to the new directory structure.
+
 ### Testing:
 1. Regenerate erosion maps to see improved boundaries
 2. Check that tiles show accurate boundary shapes

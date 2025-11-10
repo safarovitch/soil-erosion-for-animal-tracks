@@ -64,14 +64,27 @@
           label="name_en"
           :clearable="false"
           :searchable="true"
+          :multiple="isRegionMultiselect"
+          :close-on-select="isRegionMultiselect ? false : true"
+          :clear-on-select="false"
           class="region-select"
-          placeholder="Choose a region"
+          :placeholder="isRegionMultiselect ? 'Choose one or more regions' : 'Choose a region'"
           :reduce="option => option"
         >
-        <template #selected-option="{ option }">
+        <template #selected-option="{ option, deselect }">
           <div v-if="option" class="flex flex-col text-sm leading-snug">
-            <span class="font-medium text-gray-900">{{ option?.name_en || '' }}</span>
-            <span v-if="option?.name_tj" class="text-xs text-gray-500">{{ option.name_tj }}</span>
+            <span v-if="!isRegionMultiselect" class="font-medium text-gray-900">{{ option?.name_en || '' }}</span>
+            <span v-else class="inline-flex items-center rounded-full bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 mr-1 mb-1">
+              {{ option?.name_en || '' }}
+              <button
+                type="button"
+                class="ml-1 text-blue-500 hover:text-blue-700 focus:outline-none"
+                @click.stop="deselect(option)"
+              >
+                ×
+              </button>
+            </span>
+            <span v-if="!isRegionMultiselect && option?.name_tj" class="text-xs text-gray-500">{{ option.name_tj }}</span>
           </div>
         </template>
         <template #option="{ option }">
@@ -139,16 +152,6 @@
         Leave blank to analyze the entire region.
       </p>
     </div>
-
-    <!-- Actions -->
-    <div class="flex space-x-2">
-      <button
-        @click="clearSelection"
-        class="flex-1 bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 text-sm"
-      >
-        Clear Selection
-      </button>
-    </div>
   </div>
 </template>
 
@@ -205,15 +208,36 @@ const suppressDistrictEmit = ref(false)
 
 watch(selectedRegionOption, (region) => {
   handleRegionChange(region)
-})
+}, { deep: true })
 
 watch(selectedDistrictOptions, () => {
   handleDistrictChange()
 }, { deep: true })
 
+// Check if region selector should be multiselect
+// Multiselect when: region is selected AND no district is selected
+const isRegionMultiselect = computed(() => {
+  if (!selectedRegionOption.value) return false
+  if (Array.isArray(selectedRegionOption.value)) {
+    // If multiple regions selected, check if any districts are selected
+    return selectedDistrictOptions.value.length === 0
+  }
+  // Single region selected - multiselect if no districts selected
+  return selectedDistrictOptions.value.length === 0 && 
+         selectedRegionOption.value.id !== countryOption.value.id
+})
+
+// Show district selector only when single region is selected (not multiple)
 const showDistrictSelector = computed(() => {
-  return selectedRegionOption.value &&
-    selectedRegionOption.value.id !== countryOption.value.id
+  if (!selectedRegionOption.value) return false
+  
+  // If multiple regions selected, don't show district selector
+  if (Array.isArray(selectedRegionOption.value)) {
+    return false
+  }
+  
+  // Single region selected - show district selector if not country
+  return selectedRegionOption.value.id !== countryOption.value.id
 })
 
 const filteredDistricts = computed(() => {
@@ -221,7 +245,17 @@ const filteredDistricts = computed(() => {
     return []
   }
 
-  return props.districts.filter(district => district.region_id === selectedRegionOption.value.id)
+  // Handle single region selection
+  if (!Array.isArray(selectedRegionOption.value)) {
+    return props.districts.filter(district => district.region_id === selectedRegionOption.value.id)
+  }
+
+  // Multiple regions - return districts from all selected regions
+  const selectedRegionIds = selectedRegionOption.value
+    .filter(r => r.id !== countryOption.value.id)
+    .map(r => r.id)
+  
+  return props.districts.filter(district => selectedRegionIds.includes(district.region_id))
 })
 
 const buildAreasPayload = () => {
@@ -229,6 +263,23 @@ const buildAreasPayload = () => {
     return []
   }
 
+  // Handle multiple regions selected
+  if (Array.isArray(selectedRegionOption.value)) {
+    return selectedRegionOption.value.map(region => {
+      if (region.id === countryOption.value.id) {
+        return {
+          ...countryOption.value,
+          type: 'country'
+        }
+      }
+      return {
+        ...region,
+        type: 'region'
+      }
+    })
+  }
+
+  // Single region selected
   if (selectedRegionOption.value.id === countryOption.value.id) {
     return [{
       ...countryOption.value,
@@ -236,17 +287,19 @@ const buildAreasPayload = () => {
     }]
   }
 
-  if (selectedDistrictOptions.value.length === 0) {
-    return [{
-      ...selectedRegionOption.value,
-      type: 'region'
-    }]
+  // If districts are selected, return districts
+  if (selectedDistrictOptions.value.length > 0) {
+    return selectedDistrictOptions.value.map(district => ({
+      ...district,
+      type: 'district'
+    }))
   }
 
-  return selectedDistrictOptions.value.map(district => ({
-    ...district,
-    type: 'district'
-  }))
+  // Single region, no districts selected
+  return [{
+    ...selectedRegionOption.value,
+    type: 'region'
+  }]
 }
 
 const handleRegionChange = (region) => {
@@ -257,9 +310,12 @@ const handleRegionChange = (region) => {
     suppressDistrictEmit.value = true
   }
 
-  selectedDistrictOptions.value = []
+  // Clear districts when region changes (unless we're suppressing)
+  if (shouldEmit) {
+    selectedDistrictOptions.value = []
+  }
 
-  if (!region) {
+  if (!region || (Array.isArray(region) && region.length === 0)) {
     if (shouldEmit) {
       emit('update:selectedRegion', null)
       emit('update:selectedDistrict', null)
@@ -271,16 +327,47 @@ const handleRegionChange = (region) => {
   }
 
   if (shouldEmit) {
-    if (region.id === countryOption.value.id) {
-      emit('update:selectedRegion', { ...countryOption.value })
-      emit('update:selectedDistrict', null)
-      emit('region-change', { ...countryOption.value })
-      emit('district-change', null)
+    // Handle multiple regions selected
+    if (Array.isArray(region)) {
+      // Filter out country option if multiple regions selected
+      const regionsOnly = region.filter(r => r.id !== countryOption.value.id)
+      
+      if (regionsOnly.length === 0) {
+        // Only country selected
+        emit('update:selectedRegion', { ...countryOption.value })
+        emit('update:selectedDistrict', null)
+        emit('region-change', { ...countryOption.value })
+        emit('district-change', null)
+        emit('areas-change', buildAreasPayload())
+      } else if (regionsOnly.length === 1) {
+        // Single region selected from multiselect
+        emit('update:selectedRegion', regionsOnly[0])
+        emit('update:selectedDistrict', null)
+        emit('region-change', regionsOnly[0])
+        emit('district-change', null)
+        emit('areas-change', buildAreasPayload())
+      } else {
+        // Multiple regions selected
+        emit('update:selectedRegion', null) // Clear single region selection
+        emit('update:selectedDistrict', null)
+        emit('region-change', null)
+        emit('district-change', null)
+        emit('areas-change', buildAreasPayload())
+      }
     } else {
-      emit('update:selectedRegion', region)
-      emit('update:selectedDistrict', null)
-      emit('region-change', region)
-      emit('district-change', null)
+      // Single region selected
+      if (region.id === countryOption.value.id) {
+        emit('update:selectedRegion', { ...countryOption.value })
+        emit('update:selectedDistrict', null)
+        emit('region-change', { ...countryOption.value })
+        emit('district-change', null)
+      } else {
+        emit('update:selectedRegion', region)
+        emit('update:selectedDistrict', null)
+        emit('region-change', region)
+        emit('district-change', null)
+      }
+      emit('areas-change', buildAreasPayload())
     }
   }
 }
@@ -327,7 +414,10 @@ watch(() => props.selectedRegion, (newRegion) => {
     selectedDistrictOptions.value = []
   } else {
     suppressRegionEmit.value = true
-    selectedRegionOption.value = props.regions.find(region => region.id === newRegion.id) || null
+    const region = props.regions.find(region => region.id === newRegion.id)
+    if (region) {
+      selectedRegionOption.value = region
+    }
   }
 }, { immediate: true })
 
@@ -360,6 +450,29 @@ watch(() => props.selectedAreas, (areas) => {
     return
   }
 
+  // Check if we have multiple regions or districts from different regions
+  const regions = areas.filter(a => 
+    (a.type === 'region' || a.area_type === 'region' || (!a.region_id && a.id && a.id !== 0)) &&
+    (a.type !== 'country' && a.area_type !== 'country')
+  )
+  const districts = areas.filter(a => 
+    a.type === 'district' || a.area_type === 'district' || a.region_id
+  )
+
+  // If multiple regions selected, set as array
+  if (regions.length > 1) {
+    const regionObjects = regions.map(area => 
+      props.regions.find(r => r.id === area.id)
+    ).filter(Boolean)
+    
+    suppressRegionEmit.value = true
+    selectedRegionOption.value = regionObjects.length > 0 ? regionObjects : null
+    suppressDistrictEmit.value = true
+    selectedDistrictOptions.value = []
+    return
+  }
+
+  // Single region or district
   const primaryArea = areas[0]
 
   if (primaryArea.type === 'country' || primaryArea.area_type === 'country') {
@@ -383,14 +496,14 @@ watch(() => props.selectedAreas, (areas) => {
     primaryArea.region_id
   ) {
     const region = props.regions.find(r => r.id === primaryArea.region_id)
-    const districts = props.districts.filter(d =>
+    const districtObjects = props.districts.filter(d =>
       areas.some(area => area.id === d.id)
     )
 
     suppressRegionEmit.value = true
     selectedRegionOption.value = region || null
     suppressDistrictEmit.value = true
-    selectedDistrictOptions.value = districts
+    selectedDistrictOptions.value = districtObjects
   }
 }, { deep: true })
 

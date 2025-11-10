@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\ErosionCache;
 use Illuminate\Console\Command;
 use App\Models\PrecomputedErosionMap;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 
 class ClearComputations extends Command
@@ -14,7 +15,7 @@ class ClearComputations extends Command
      *
      * @var string
      */
-    protected $signature = 'app:clear-computations';
+    protected $signature = 'erosion:clear-computations';
 
     /**
      * The console command description.
@@ -38,7 +39,8 @@ class ClearComputations extends Command
         $this->newLine();
         // remove directory content in storage/rusle-tiles/
         $this->info('Removing directory content in storage/rusle-tiles/');
-        Storage::disk('local')->deleteDirectory('rusle-tiles');
+        // Storage::deleteDirectory('rusle-tiles');
+        File::deleteDirectory(storage_path('rusle-tiles'));
         $this->info('Directory content has been removed');
         $this->newLine();
     }

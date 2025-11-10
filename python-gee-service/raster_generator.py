@@ -25,14 +25,15 @@ class ErosionRasterGenerator:
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.rusle_calc = RUSLECalculator()
         
-    def generate_geotiff(self, area_type, area_id, year, geometry_json, bbox=None):
+    def generate_geotiff(self, area_type, area_id, year, geometry_json, bbox=None, end_year=None):
         """
         Generate GeoTIFF raster for erosion data
         
         Args:
             area_type: 'region' or 'district'
             area_id: ID of the area
-            year: Year to compute
+            year: Year to compute (start year if range)
+            end_year: Optional inclusive end year (defaults to same as year)
             geometry_json: GeoJSON geometry dict
             bbox: Optional bbox [minLon, minLat, maxLon, maxLat]
             
@@ -40,7 +41,11 @@ class ErosionRasterGenerator:
             tuple: (geotiff_path, statistics, metadata)
         """
         try:
-            logger.info(f"Generating GeoTIFF for {area_type} {area_id}, year {year}")
+            start_year = year
+            end_year = end_year if end_year is not None else year
+            period_label = str(start_year) if end_year == start_year else f"{start_year}-{end_year}"
+            
+            logger.info(f"Generating GeoTIFF for {area_type} {area_id}, period {period_label}")
             
             # Convert GeoJSON to EE Geometry
             geometry = gee_service.geometry_from_geojson(geometry_json)
@@ -64,19 +69,46 @@ class ErosionRasterGenerator:
             logger.info(f"Using simplified geometry (tolerance: {tolerance}m) for computation")
             logger.info(f"Using original geometry for boundary clipping")
             
-            rusle_result = self.rusle_calc.compute_rusle(
-                year, 
-                simplified_geom, 
-                scale=scale,
-                compute_stats=True
-            )
+            if end_year != start_year:
+                logger.info(f"Using decade-average rainfall ({start_year}-{end_year}) for R-factor")
+                r_factor_image = self.rusle_calc.compute_r_factor_range(
+                    start_year,
+                    end_year,
+                    simplified_geom
+                )
+                rusle_result = self.rusle_calc.compute_rusle(
+                    start_year,
+                    simplified_geom,
+                    scale=scale,
+                    compute_stats=True,
+                    r_factor_image=r_factor_image
+                )
+                rainfall_stats = self.rusle_calc.compute_rainfall_statistics(
+                    start_year,
+                    end_year,
+                    original_geom,
+                    scale=max(5000, scale)
+                )
+            else:
+                rusle_result = self.rusle_calc.compute_rusle(
+                    year, 
+                    simplified_geom, 
+                    scale=scale,
+                    compute_stats=True
+                )
+                rainfall_stats = self.rusle_calc.compute_rainfall_statistics(
+                    start_year,
+                    end_year,
+                    original_geom,
+                    scale=max(5000, scale)
+                )
             
             # Clip to original geometry for accurate boundaries
             soil_loss_image = rusle_result['image'].clip(original_geom)
             statistics = rusle_result['statistics']
             
             # Define output path
-            output_dir = self.storage_path / 'geotiff' / f'{area_type}_{area_id}' / str(year)
+            output_dir = self.storage_path / 'geotiff' / f'{area_type}_{area_id}' / period_label
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / 'erosion.tif'
             
@@ -110,6 +142,11 @@ class ErosionRasterGenerator:
             
             # Prepare metadata
             metadata = {
+                'period': {
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'label': period_label
+                },
                 'area_km2': complexity['area_km2'],
                 'complexity': complexity['complexity_level'],
                 'scale': scale,
@@ -117,7 +154,13 @@ class ErosionRasterGenerator:
                 'bbox': bbox,
                 'original_geometry': geometry_json,  # Store original geometry for tile masking
                 'tile_count': tile_count,
-                'tiling_error': tiling_error
+                'tiling_error': tiling_error,
+                'rainfall_statistics': rainfall_stats,
+                'erosion_class_breakdown': self.rusle_calc.compute_erosion_class_breakdown(
+                    soil_loss_image,
+                    original_geom,
+                    scale=max(100, scale)
+                )
             }
             
             return str(output_path), statistics, metadata
@@ -214,12 +257,17 @@ class ErosionRasterGenerator:
         Download an image by splitting the region into manageable tiles and mosaicking.
         """
         bounds = geometry.bounds().getInfo()
-        min_lon, min_lat, max_lon, max_lat = bounds['coordinates'][0][0]
-        for coord in bounds['coordinates'][0]:
-            min_lon = min(min_lon, coord[0])
-            min_lat = min(min_lat, coord[1])
-            max_lon = max(max_lon, coord[0])
-            max_lat = max(max_lat, coord[1])
+        coords = bounds['coordinates'][0]
+        lons = [coord[0] for coord in coords]
+        lats = [coord[1] for coord in coords]
+
+        if not lons or not lats:
+            raise ValueError("Geometry bounds returned no coordinates.")
+
+        min_lon = min(lons)
+        max_lon = max(lons)
+        min_lat = min(lats)
+        max_lat = max(lats)
 
         width_deg = max_lon - min_lon
         height_deg = max_lat - min_lat

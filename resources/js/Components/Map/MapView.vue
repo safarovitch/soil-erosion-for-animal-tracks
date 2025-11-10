@@ -58,7 +58,7 @@ const topoJsonLayer = ref(null)
 const areaHighlightLayer = ref(null) // Layer for highlighting selected areas
 const erosionDataByDistrict = ref({}) // Store erosion data for coloring
 const drawnFeatures = ref([]) // Store all drawn features for management
-const detailedErosionLayer = ref(null) // Detailed erosion visualization layer for selected area
+const detailedErosionLayers = ref(new Map()) // Map of detailed erosion tile layers keyed by area-period
 const animatedLayers = ref(new Set()) // Track layers with animated borders
 const baseLayer = ref(null) // Reference to base layer
 const labelsLayer = ref(null) // Reference to labels layer
@@ -70,6 +70,34 @@ const scaleLine = ref(null) // Scale line control
 const selectedPeriod = computed(() => props.selectedPeriod || DEFAULT_YEAR_PERIOD)
 const periodStartYear = computed(() => selectedPeriod.value.startYear)
 const periodEndYear = computed(() => selectedPeriod.value.endYear)
+
+const buildDetailedLayerKey = (areaType, areaId, startYear, endYear) =>
+  `${areaType}-${areaId}-${startYear}-${endYear}`
+
+const removeDetailedLayer = (layerKey) => {
+  const existingLayer = detailedErosionLayers.value.get(layerKey)
+  if (existingLayer && map.value) {
+    map.value.removeLayer(existingLayer)
+  }
+  detailedErosionLayers.value.delete(layerKey)
+}
+
+const registerDetailedLayer = (layerKey, layerInstance) => {
+  const existingLayer = detailedErosionLayers.value.get(layerKey)
+  if (existingLayer && map.value) {
+    map.value.removeLayer(existingLayer)
+  }
+  detailedErosionLayers.value.set(layerKey, layerInstance)
+}
+
+const removeUnusedDetailedLayers = (validKeys) => {
+  const keys = Array.from(detailedErosionLayers.value.keys())
+  keys.forEach((key) => {
+    if (!validKeys.has(key)) {
+      removeDetailedLayer(key)
+    }
+  })
+}
 
 // Map configuration
 const mapConfig = {
@@ -264,7 +292,7 @@ const getErosionColorRGB = (erosionRate) => {
 }
 
 // Smooth border animation functions
-const animateBorderDrawing = (layer, features, duration = 2000, strokeColor = '#3b82f6', strokeWidth = 2) => {
+const animateBorderDrawing = (layer, features, duration = 1200, strokeColor = 'rgba(0,0,0,0.6)', strokeWidth = 1.5) => {
   if (!layer || !features || features.length === 0) return
 
   const startTime = Date.now()
@@ -285,8 +313,9 @@ const animateBorderDrawing = (layer, features, duration = 2000, strokeColor = '#
     const animatedOpacity = Math.min(0.3 + (easedProgress * 0.7), 1) // Start with low opacity
     
     // Create animated stroke style
+    const animatedColor = `rgba(0, 0, 0, ${0.3 + animatedOpacity * 0.5})`
     const animatedStroke = new Stroke({
-      color: strokeColor.replace(/[\d.]+\)$/, `${animatedOpacity})`),
+      color: animatedColor,
       width: animatedWidth,
       lineCap: 'round',
       lineJoin: 'round'
@@ -310,7 +339,7 @@ const animateBorderDrawing = (layer, features, duration = 2000, strokeColor = '#
     } else {
       // Animation complete - set final style
       const finalStroke = new Stroke({
-        color: strokeColor,
+        color: typeof strokeColor === 'string' ? strokeColor : 'rgba(0,0,0,0.6)',
         width: strokeWidth,
         lineCap: 'round',
         lineJoin: 'round'
@@ -348,8 +377,8 @@ const animateLayerBorderDrawing = (layer, duration = 2000) => {
 
   // Get layer style to extract stroke properties
   const layerStyle = layer.getStyle()
-  let strokeColor = '#3b82f6'
-  let strokeWidth = 2
+  let strokeColor = 'rgba(0,0,0,0.4)'
+  let strokeWidth = 1
 
   if (layerStyle && layerStyle.getStroke) {
     const stroke = layerStyle.getStroke()
@@ -364,7 +393,7 @@ const animateLayerBorderDrawing = (layer, duration = 2000) => {
 }
 
 // Progressive border drawing for complex geometries
-const animateComplexBorderDrawing = (layer, features, duration = 3000) => {
+const animateComplexBorderDrawing = (layer, features, duration = 1800) => {
   if (!layer || !features || features.length === 0) return
 
   const startTime = Date.now()
@@ -384,11 +413,11 @@ const animateComplexBorderDrawing = (layer, features, duration = 3000) => {
     const pulseProgress = Math.sin(progress * Math.PI * 4) * 0.3 + 0.7 // Pulsing effect
     
     // Animated stroke properties
-    const animatedWidth = 2 + (pulseProgress * 1.5)
-    const animatedOpacity = Math.min(0.2 + (revealProgress * 0.8), 1)
+    const animatedWidth = 1 + (pulseProgress * 0.8)
+    const animatedOpacity = Math.min(0.15 + (revealProgress * 0.5), 0.5)
     
     const animatedStroke = new Stroke({
-      color: `rgba(59, 130, 246, ${animatedOpacity})`,
+      color: `rgba(0, 0, 0, ${animatedOpacity})`,
       width: animatedWidth,
       lineCap: 'round',
       lineJoin: 'round',
@@ -413,8 +442,8 @@ const animateComplexBorderDrawing = (layer, features, duration = 3000) => {
     } else {
       // Set final solid style
       const finalStroke = new Stroke({
-        color: '#3b82f6',
-        width: 2,
+        color: 'rgba(0,0,0,0.6)',
+        width: 1.5,
         lineCap: 'round',
         lineJoin: 'round'
       })
@@ -631,15 +660,7 @@ const handleMapClick = (event) => {
 
     // Zoom to the clicked district
     const geometry = feature.getGeometry()
-    if (geometry) {
-      const extent = geometry.getExtent()
-      map.value.getView().fit(extent, {
-        padding: [50, 50, 50, 50],
-        duration: 2000,
-        easing: easeOut,
-        maxZoom: 12
-      })
-    }
+    // Zooming disabled on area click to keep current view
   }
 }
 
@@ -657,7 +678,7 @@ const handleAreaClick = (event) => {
     if (geometry && !isFeatureWithinBoundary(geometry)) {
       console.log('Click is outside Tajikistan boundary')
       emit('boundary-violation')
-      return
+      return null
     }
     
     // Check if this is a district or region feature
@@ -737,10 +758,10 @@ const updateRegionLayer = (region) => {
     regionLayer.value = new VectorLayer({
       source,
       style: new Style({
-        // No fill - only blue border for selected region
+        // No fill - only border for selected region
         stroke: new Stroke({
-          color: '#0000ff',
-          width: 3,
+          color: 'rgba(0, 0, 0, 0.6)',
+          width: 2,
         }),
       }),
       zIndex: 20, // Above all data and base layers
@@ -753,13 +774,8 @@ const updateRegionLayer = (region) => {
       animateComplexBorderDrawing(regionLayer.value, features, 3000)
     }, 200)
 
-    // Fit to region bounds
-    const extent = source.getExtent()
-    map.value.getView().fit(extent, {
-      padding: [20, 20, 20, 20],
-      duration: 2000,
-      easing: easeOut
-    })
+    // Do not change zoom level when selecting areas
+    // Removed fit to region bounds to prevent zoom changes
 
   } catch (error) {
     console.error('Error updating region layer:', error)
@@ -805,10 +821,10 @@ const updateDistrictLayer = (district) => {
     districtLayer.value = new VectorLayer({
       source,
       style: new Style({
-        // No fill - only green border for selected district
+        // No fill - only border for selected district
         stroke: new Stroke({
-          color: '#00ff00',
-          width: 3,
+          color: 'rgba(0, 0, 0, 0.6)',
+          width: 2,
         }),
       }),
       zIndex: 20, // Above all data and base layers
@@ -821,13 +837,8 @@ const updateDistrictLayer = (district) => {
       animateComplexBorderDrawing(districtLayer.value, features, 3000)
     }, 200)
 
-    // Fit to district bounds
-    const extent = source.getExtent()
-    map.value.getView().fit(extent, {
-      padding: [20, 20, 20, 20],
-      duration: 2000,
-      easing: easeOut
-    })
+    // Do not change zoom level when selecting areas
+    // Removed fit to district bounds to prevent zoom changes
 
   } catch (error) {
     console.error('Error updating district layer:', error)
@@ -855,13 +866,7 @@ const updateErosionData = (data) => {
 
 // Load detailed erosion data for selected area (district or region)
 const loadDetailedErosionData = async (area) => {
-  // Remove existing detailed layer
-  if (detailedErosionLayer.value) {
-    map.value.removeLayer(detailedErosionLayer.value)
-    detailedErosionLayer.value = null
-  }
-
-  if (!area) return
+  if (!area) return null
 
   const areaLabel = area.name_en || area.name || 'selected area'
 
@@ -875,50 +880,58 @@ const loadDetailedErosionData = async (area) => {
         message: 'Please select a specific region or district to view erosion tiles.',
         details: 'Country-wide erosion tiles are not generated.'
       })
-      return
+      return null
     }
 
     const areaType = area.region_id ? 'district' : 'region'
     const areaId = area.id
     const endYear = periodEndYear.value || new Date().getFullYear()
+    const layerKey = buildDetailedLayerKey(areaType, areaId, periodStartYear.value, endYear)
 
-    if (endYear < 2015) {
-      emit('layer-warning', {
-        type: 'info',
-        title: 'Tiles Unavailable',
-        message: `Precomputed tiles are only available from 2015 onwards.`,
-        details: `Selected period ${periodStartYear.value} - ${endYear} predates available tile data.`,
-      })
-      return
-    }
+    // if (endYear < 1993) {
+    //   emit('layer-warning', {
+    //     type: 'info',
+    //     title: 'Tiles Unavailable',
+    //     message: `Precomputed tiles are only available from 1993 onwards.`,
+    //     details: `Selected period ${periodStartYear.value} - ${endYear} predates available tile data.`,
+    //   })
+    //   return
+    // }
 
     // Ask backend for availability (this queues generation when needed)
     const availabilityResponse = await axios.post('/api/erosion/check-availability', {
       area_type: areaType,
       area_id: areaId,
-      year: endYear
+      start_year: periodStartYear.value,
+      end_year: endYear
     })
 
     const availability = availabilityResponse.data || {}
+    const fallbackLabel =
+      periodStartYear.value === endYear
+        ? `${periodStartYear.value}`
+        : `${periodStartYear.value} - ${endYear}`
+    const periodLabelFromResponse = availability.period_label || fallbackLabel
     const status = availability.status
     const taskId = availability.task_id
 
     console.log(`Availability for ${areaLabel}:`, availability)
 
     if (status === 'available' && availability.tiles_url) {
-      detailedErosionLayer.value = new TileLayer({
+      const tileLayer = new TileLayer({
         source: new XYZ({
           url: availability.tiles_url,
           crossOrigin: 'anonymous'
         }),
         opacity: 1.0,
         zIndex: 8,
-        minZoom: 6,
+        minZoom: 7,
         maxZoom: 18
       })
 
-      map.value.addLayer(detailedErosionLayer.value)
-      console.log('✓ Added precomputed erosion tile layer:', availability.tiles_url)
+      registerDetailedLayer(layerKey, tileLayer)
+      map.value.addLayer(tileLayer)
+      console.log(`✓ Added precomputed erosion tile layer (${periodLabelFromResponse}):`, availability.tiles_url)
 
       emit('detailed-erosion-loaded', {
         areaId,
@@ -927,26 +940,26 @@ const loadDetailedErosionData = async (area) => {
         statistics: availability.statistics || null
       })
 
-      return
+      return layerKey
     }
 
     if (status === 'queued' || status === 'processing') {
       emit('layer-warning', {
         type: 'info',
         title: status === 'queued' ? 'Erosion Tiles Queued' : 'Erosion Tiles Processing',
-        message: `${areaLabel} tiles are being prepared.`,
+        message: `${areaLabel} (${periodLabelFromResponse}) tiles are being prepared.`,
         details: taskId
           ? `Fresh erosion tiles are being generated. Task ID: ${taskId}.`
           : 'Fresh erosion tiles are being generated and should be ready within about 5–10 minutes.'
       })
-      return
+      return null
     }
 
     if (status === 'failed' || status === 'error') {
       emit('layer-warning', {
         type: 'error',
         title: 'Erosion Tiles Unavailable',
-        message: `We could not load erosion tiles for ${areaLabel}.`,
+        message: `We could not load erosion tiles for ${areaLabel} (${periodLabelFromResponse}).`,
         details: availability.error || availability.error_message || 'Please try again later.'
       })
       return
@@ -955,11 +968,12 @@ const loadDetailedErosionData = async (area) => {
     emit('layer-warning', {
       type: 'warning',
       title: 'Erosion Tiles Pending',
-      message: `Erosion tiles for ${areaLabel} are not ready yet.`,
+      message: `Erosion tiles for ${areaLabel} (${periodLabelFromResponse}) are not ready yet.`,
       details: taskId
         ? `Tile generation has been requested (Task ID: ${taskId}). Please check back shortly.`
         : 'Tile generation has been requested. Please check back shortly.'
     })
+    return null
   } catch (error) {
     console.error('Error checking erosion tile availability:', error)
     emit('layer-warning', {
@@ -969,6 +983,7 @@ const loadDetailedErosionData = async (area) => {
       details: error.message || 'Please try again later.'
     })
     emit('geometry-error', 'Failed to load detailed erosion data: ' + error.message)
+    return null
   }
 }
 
@@ -1107,12 +1122,6 @@ const updateMapLayers = async () => {
       type: 'sequential',
       apiEndpoint: null,
       defaultOpacity: 1.0
-    },
-    custom: {
-      name: 'Custom Datasets',
-      type: 'custom',
-      apiEndpoint: null,
-      defaultOpacity: 1.0
     }
   }
 
@@ -1170,6 +1179,8 @@ const updateMapLayers = async () => {
           return // Don't load detailed grid for country-level
         }
         
+        const activeDetailedKeys = new Set()
+
         if (hasMultipleAreas) {
           // Multiple areas selected - load erosion data for each area
           console.log(`${selectedAreas.length} areas selected, loading erosion data for each`)
@@ -1179,12 +1190,19 @@ const updateMapLayers = async () => {
               console.log('Skipping country-level area in multiple selection')
               continue
             }
-            await loadDetailedErosionData(area)
+            const layerKey = await loadDetailedErosionData(area)
+            if (layerKey) {
+              activeDetailedKeys.add(layerKey)
+            }
           }
         } else if (selectedArea) {
           // Single area selected - load detailed erosion data for that area
-          await loadDetailedErosionData(selectedArea)
+          const layerKey = await loadDetailedErosionData(selectedArea)
+          if (layerKey) {
+            activeDetailedKeys.add(layerKey)
+          }
         }
+        removeUnusedDetailedLayers(activeDetailedKeys)
         return
       }
 
@@ -1560,7 +1578,7 @@ const createVectorLayerFromData = async (layerId, layerDef, area, layerData, opa
           }),
           stroke: new Stroke({
             color: 'rgba(255, 0, 0, 1)',
-            width: 2
+            width: 1
           })
         }))
         
@@ -1790,7 +1808,10 @@ watch(() => props.visibleLayers, (newLayers) => {
   console.log('Visible layers changed:', newLayers)
   if (!map.value) {
     console.log('Map not ready yet')
+    return
   }
+
+  updateMapLayers()
 }, { immediate: true, deep: true })
 
 watch(() => props.analysisTrigger, (trigger, previous) => {
@@ -1980,7 +2001,7 @@ const highlightDistrict = (districtName) => {
           color: 'rgba(59, 130, 246, 0.3)', // Highlighted district
         }),
         stroke: new Stroke({
-          color: '#2563eb',
+          color: '#000000',
           width: 3,
         }),
       }))
@@ -2159,16 +2180,6 @@ const loadGeoJSONOnMapReady = async () => {
 watch(() => props.selectedDistrict, (newDistrict, oldDistrict) => {
   console.log('Selected district changed:', newDistrict)
   refreshDistrictsLayer()
-  
-  if (newDistrict && newDistrict.center) {
-    // Zoom to the selected district
-    const [lon, lat] = newDistrict.center
-    map.value.getView().animate({
-      center: fromLonLat([lon, lat]),
-      zoom: 10,
-      duration: 1000
-    })
-  }
 })
 
 watch(() => props.districts, (newDistricts) => {
@@ -2319,6 +2330,12 @@ const clearAllLayerColors = () => {
       regionLayer.value.changed()
     }
   }
+
+  // Remove all detailed erosion layers
+  if (map.value) {
+    const keys = Array.from(detailedErosionLayers.value.keys())
+    keys.forEach(removeDetailedLayer)
+  }
   
   console.log('Cleared all layer colors from map')
 }
@@ -2386,7 +2403,7 @@ const highlightSelectedAreas = (selectedAreas) => {
 
             feature.setStyle(new Style({
               stroke: new Stroke({
-                color: '#2563eb',
+              color: '#000000',
                 width: 3
               }),
               fill: new Fill({
@@ -2402,21 +2419,105 @@ const highlightSelectedAreas = (selectedAreas) => {
       }
 
       // Check if area has geometry data
-      if (!area.geometry) {
+      let geometryData = area.geometry
+      
+      // If no geometry in area object, try to find it from regions or districts props
+      if (!geometryData && props.regions && area.id) {
+        const foundRegion = props.regions.find(r => r.id === area.id)
+        if (foundRegion && foundRegion.geometry) {
+          geometryData = foundRegion.geometry
+          console.log(`Found geometry for region ${area.name_en} from props`)
+        }
+      }
+      
+      if (!geometryData && props.districts && area.id) {
+        const foundDistrict = props.districts.find(d => d.id === area.id)
+        if (foundDistrict && foundDistrict.geometry) {
+          geometryData = foundDistrict.geometry
+          console.log(`Found geometry for district ${area.name_en} from props`)
+        }
+      }
+      
+      // If still no geometry, try to find from topoJsonLayer by name
+      if (!geometryData && topoJsonLayer.value) {
+        const source = topoJsonLayer.value.getSource()
+        if (source) {
+          const features = source.getFeatures()
+          const matchingFeature = features.find(f => {
+            const props = f.getProperties()
+            return props.shapeName === area.name_en || 
+                   props.shapeName === area.name_tj ||
+                   props.shapeName === area.name
+          })
+          
+          if (matchingFeature) {
+            const geometry = matchingFeature.getGeometry()
+            if (geometry) {
+              // Convert OpenLayers geometry to GeoJSON
+              const geojsonFormat = new GeoJSON()
+              const geoJsonFeature = geojsonFormat.writeFeatureObject(matchingFeature, {
+                featureProjection: 'EPSG:3857',
+                dataProjection: 'EPSG:4326'
+              })
+              geometryData = geoJsonFeature.geometry
+              console.log(`Found geometry for ${area.name_en} from topoJsonLayer`)
+            }
+          }
+        }
+      }
+      
+      // If still no geometry, use fallback
+      if (!geometryData) {
         console.warn(`Area ${area.name_en} has no geometry data, creating fallback highlight`)
         
-        // Create a fallback highlight using approximate coordinates for each region
-        // This is a temporary solution until geometry data is available
-        const regionCoordinates = {
-          'Sughd': [69.0, 40.0], // Northern Tajikistan
-          'Khatlon': [68.5, 37.5], // Southern Tajikistan
-          'Gorno-Badakhshan': [72.0, 38.5], // Eastern Tajikistan
-          'Dushanbe': [68.8, 38.5], // Capital region
-          'RRS': [68.8, 38.5] // Republican Subordination
+        // Try to find from topoJsonLayer by matching ID or name
+        let fallbackFeature = null
+        if (topoJsonLayer.value) {
+          const source = topoJsonLayer.value.getSource()
+          if (source) {
+            const features = source.getFeatures()
+            const matchingFeature = features.find(f => {
+              const props = f.getProperties()
+              // Try multiple matching strategies
+              return (area.id && props.shapeID === area.id) ||
+                     props.shapeName === area.name_en ||
+                     props.shapeName === area.name_tj ||
+                     props.shapeName === area.name
+            })
+            
+            if (matchingFeature) {
+              fallbackFeature = matchingFeature.clone()
+              fallbackFeature.setProperties({
+                areaId: area.id,
+                areaName: area.name_en,
+                areaType: area.type || area.area_type,
+                isHighlighted: true
+              })
+              fallbackFeature.setStyle(new Style({
+                stroke: new Stroke({
+              color: '#000000',
+                  width: 3
+                })
+              }))
+              highlightFeatures.push(fallbackFeature)
+              console.log(`Created highlight from topoJsonLayer for area: ${area.name_en}`)
+              continue
+            }
+          }
         }
         
-        const coords = regionCoordinates[area.name_en] || [68.0, 37.0] // Default to center of Tajikistan
-        const size = 0.5 // Size of the fallback highlight
+        // Last resort: create a small fallback polygon
+        const regionCoordinates = {
+          'Sughd': [69.0, 40.0],
+          'Khatlon': [68.5, 37.5],
+          'Gorno-Badakhshan': [72.0, 38.5],
+          'Dushanbe': [68.8, 38.5],
+          'RRS': [68.8, 38.5],
+          'Republican Subordination': [68.8, 38.5]
+        }
+        
+        const coords = regionCoordinates[area.name_en] || [68.0, 37.0]
+        const size = 0.5
         
         const fallbackGeometry = new Polygon([[
           [coords[0] - size/2, coords[1] - size/2],
@@ -2426,7 +2527,7 @@ const highlightSelectedAreas = (selectedAreas) => {
           [coords[0] - size/2, coords[1] - size/2]
         ]])
         
-        const fallbackFeature = new Feature({
+        const fallbackFeatureObj = new Feature({
           geometry: fallbackGeometry,
           areaId: area.id,
           areaName: area.name_en,
@@ -2435,21 +2536,19 @@ const highlightSelectedAreas = (selectedAreas) => {
           isFallback: true
         })
         
-        // Style the fallback feature with a different color
-        fallbackFeature.setStyle(new Style({
-          // No fill - only orange border for fallback highlight
+        fallbackFeatureObj.setStyle(new Style({
           stroke: new Stroke({
-            color: '#FFA500', // Orange border
+            color: '#000000',
             width: 3
           })
         }))
         
-        highlightFeatures.push(fallbackFeature)
+        highlightFeatures.push(fallbackFeatureObj)
         console.log(`Created fallback highlight for area: ${area.name_en}`)
         continue
       }
       
-      let geometryData = area.geometry
+      // Process geometry data
       if (typeof geometryData === 'string') {
         try {
           geometryData = JSON.parse(geometryData)
@@ -2484,9 +2583,9 @@ const highlightSelectedAreas = (selectedAreas) => {
         
         // Style the highlighted feature
         feature.setStyle(new Style({
-          // No fill - only yellow border for selected areas
+          // No fill - only border for selected areas
           stroke: new Stroke({
-            color: '#FFFF00', // Yellow border
+            color: '#000000',
             width: 3
           })
         }))
