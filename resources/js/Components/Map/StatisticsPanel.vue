@@ -3,8 +3,8 @@
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-bold text-gray-900">
         Detailed Statistics
-        <span v-if="selectedArea" class="text-sm font-normal text-gray-600">
-          - {{ selectedArea.name || selectedArea.name_en }}
+        <span v-if="panelSubtitle" class="text-sm font-normal text-gray-600">
+          - {{ panelSubtitle }}
         </span>
       </h3>
       <div class="flex space-x-2">
@@ -25,7 +25,6 @@
       </div>
     </div>
 
-    <!-- Tabs for different stat views -->
     <div class="border-b border-gray-200 mb-4">
       <nav class="-mb-px flex space-x-4">
         <button
@@ -44,108 +43,215 @@
       </nav>
     </div>
 
-    <!-- Tab Content -->
-    <div class="space-y-6">
-      <!-- Overview Tab -->
+    <div v-if="formattedEntries.length === 0" class="text-sm text-gray-500">
+      Select an area to view statistics.
+    </div>
+
+    <div v-else class="space-y-6">
       <div v-if="activeTab === 'overview'" class="space-y-4">
-        <!-- Erosion Metrics -->
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Erosion Metrics</h4>
+        <div
+          v-for="entry in formattedEntries"
+          :key="`overview-${entry.key}`"
+          class="bg-gray-50 rounded-lg p-4 space-y-4"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="font-semibold text-gray-900">{{ entry.areaName }}</h4>
+              <p class="text-xs text-gray-500">
+                Key erosion and rainfall metrics for this {{ entry.areaTypeLabel.toLowerCase() }}.
+              </p>
+            </div>
+            <span
+              class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide"
+              :class="entry.badgeClass"
+            >
+              {{ entry.areaTypeLabel }}
+            </span>
+          </div>
+
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="text-center">
-              <div class="text-2xl font-bold text-blue-600">{{ stats.erosion?.mean || 0 }}</div>
+              <div class="text-2xl font-bold text-blue-600">{{ entry.erosion.mean }}</div>
               <div class="text-xs text-gray-600">Mean (t/ha/yr)</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-green-600">{{ stats.erosion?.min || 0 }}</div>
+              <div class="text-2xl font-bold text-green-600">{{ entry.erosion.min }}</div>
               <div class="text-xs text-gray-600">Min (t/ha/yr)</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-red-600">{{ stats.erosion?.max || 0 }}</div>
+              <div class="text-2xl font-bold text-red-600">{{ entry.erosion.max }}</div>
               <div class="text-xs text-gray-600">Max (t/ha/yr)</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-purple-600">{{ stats.erosion?.cv || 0 }}%</div>
+              <div class="text-2xl font-bold text-purple-600">{{ entry.erosion.cv }}%</div>
               <div class="text-xs text-gray-600">CV</div>
             </div>
           </div>
-        </div>
 
-        <!-- Rainfall Metrics -->
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Rainfall Metrics</h4>
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="text-center">
-              <div class="text-2xl font-bold text-orange-600">{{ stats.rainfall?.slope || 0 }}%</div>
-              <div class="text-xs text-gray-600">Trend (% decreasing)</div>
+              <div class="text-2xl font-bold text-orange-600">{{ entry.rainfall.slope }}%</div>
+              <div class="text-xs text-gray-600">Rainfall Trend (% change)</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-teal-600">{{ stats.rainfall?.cv || 0 }}%</div>
-              <div class="text-xs text-gray-600">Variability (CV)</div>
+              <div class="text-2xl font-bold text-teal-600">{{ entry.rainfall.cv }}%</div>
+              <div class="text-xs text-gray-600">Rainfall Variability (CV)</div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Area Distribution Tab -->
-      <div v-if="activeTab === 'distribution'" class="space-y-4">
-        <!-- Severity Class Table -->
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Area by Severity Class</h4>
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b">
-                <th class="text-left py-2">Class</th>
-                <th class="text-right py-2">Area (ha)</th>
-                <th class="text-right py-2">Percentage</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(item, index) in severityDistribution" :key="index" class="border-b">
-                <td class="py-2">
-                  <span :class="getSeverityColorClass(item.class)">{{ item.class }}</span>
-                </td>
-                <td class="text-right py-2">{{ item.area.toLocaleString() }}</td>
-                <td class="text-right py-2">{{ item.percentage.toFixed(1) }}%</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <div v-else-if="activeTab === 'distribution'" class="space-y-4">
+        <div
+          v-for="entry in formattedEntries"
+          :key="`distribution-${entry.key}`"
+          class="bg-gray-50 rounded-lg p-4 space-y-4"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="font-semibold text-gray-900">
+                Severity Breakdown — {{ entry.areaName }}
+              </h4>
+              <p class="text-xs text-gray-500">
+                Area share by erosion severity class (hectares & percentage).
+              </p>
+            </div>
+            <span
+              class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide"
+              :class="entry.badgeClass"
+            >
+              {{ entry.areaTypeLabel }}
+            </span>
+          </div>
 
-        <!-- Pie Chart -->
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Severity Distribution</h4>
-          <canvas ref="pieChartCanvas" class="max-h-64"></canvas>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b">
+                  <th class="text-left py-2">Class</th>
+                  <th class="text-right py-2">Area (ha)</th>
+                  <th class="text-right py-2">Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(item, index) in entry.severityDistribution"
+                  :key="index"
+                  class="border-b"
+                >
+                  <td class="py-2">
+                    <span :class="getSeverityColorClass(item.class)">{{ item.class }}</span>
+                  </td>
+                  <td class="text-right py-2">{{ item.area.toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td>
+                  <td class="text-right py-2">{{ item.percentage.toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div v-if="entry.hasSeverityData">
+            <canvas
+              class="max-h-64"
+              :ref="el => setPieChartRef(entry.key, el)"
+            ></canvas>
+          </div>
+          <p v-else class="text-xs text-gray-500 italic">
+            Not enough data to render the severity chart for this area.
+          </p>
         </div>
       </div>
 
-      <!-- Charts Tab -->
-      <div v-if="activeTab === 'charts'" class="space-y-4">
-        <!-- Top Sub-areas Bar Chart -->
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Top Eroding Areas</h4>
-          <canvas ref="barChartCanvas" class="max-h-64"></canvas>
+      <div v-else-if="activeTab === 'charts'" class="space-y-4">
+        <div
+          v-for="entry in formattedEntries"
+          :key="`chart-${entry.key}`"
+          class="bg-gray-50 rounded-lg p-4 space-y-4"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="font-semibold text-gray-900">
+                Top Eroding Areas — {{ entry.areaName }}
+              </h4>
+              <p class="text-xs text-gray-500">
+                Highest erosion hotspots within this {{ entry.areaTypeLabel.toLowerCase() }}.
+              </p>
+            </div>
+            <span
+              class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide"
+              :class="entry.badgeClass"
+            >
+              {{ entry.areaTypeLabel }}
+            </span>
+          </div>
+
+          <div v-if="entry.hasTopAreas">
+            <canvas
+              class="max-h-64"
+              :ref="el => setBarChartRef(entry.key, el)"
+            ></canvas>
+          </div>
+          <p v-else class="text-xs text-gray-500 italic">
+            No ranked erosion hotspots were returned for this area.
+          </p>
         </div>
 
-        <!-- Temporal Trend Line Chart -->
-        <div v-if="timeSeriesData && timeSeriesData.length > 0" class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">Temporal Trend</h4>
+        <div
+          v-if="primaryTimeSeries.length"
+          class="bg-gray-50 rounded-lg p-4 space-y-4"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="font-semibold text-gray-900">
+                Temporal Trend — {{ primaryAreaName }}
+              </h4>
+              <p class="text-xs text-gray-500">
+                Annual erosion trend (t/ha/yr) across the selected time window.
+              </p>
+            </div>
+            <span
+              class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide bg-slate-100 text-slate-700"
+            >
+              Time Series
+            </span>
+          </div>
           <canvas ref="lineChartCanvas" class="max-h-64"></canvas>
         </div>
       </div>
 
-      <!-- RUSLE Factors Tab -->
-      <div v-if="activeTab === 'factors'" class="space-y-4">
-        <div class="bg-gray-50 rounded-lg p-4">
-          <h4 class="font-semibold text-gray-900 mb-3">RUSLE Factors (R × K × LS × C × P)</h4>
+      <div v-else-if="activeTab === 'factors'" class="space-y-4">
+        <div
+          v-for="entry in formattedEntries"
+          :key="`factors-${entry.key}`"
+          class="bg-gray-50 rounded-lg p-4 space-y-4"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="font-semibold text-gray-900">
+                RUSLE Factors — {{ entry.areaName }}
+              </h4>
+              <p class="text-xs text-gray-500">
+                Average R, K, LS, C, and P factors representing erosion drivers.
+              </p>
+            </div>
+            <span
+              class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide"
+              :class="entry.badgeClass"
+            >
+              {{ entry.areaTypeLabel }}
+            </span>
+          </div>
           <div class="space-y-3">
-            <div v-for="factor in rusleFactors" :key="factor.id" class="flex justify-between items-center border-b pb-2">
+            <div
+              v-for="factor in entry.rusleFactors"
+              :key="factor.id"
+              class="flex justify-between items-center border-b pb-2"
+            >
               <div>
                 <div class="font-medium">{{ factor.name }}</div>
                 <div class="text-xs text-gray-600">{{ factor.description }}</div>
               </div>
               <div class="text-right">
-                <div class="font-bold">{{ factor.value }}</div>
+                <div class="font-semibold">{{ factor.value }}</div>
                 <div class="text-xs text-gray-600">{{ factor.unit }}</div>
               </div>
             </div>
@@ -157,28 +263,26 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 
 Chart.register(...registerables)
 
-// Props
 const props = defineProps({
   selectedArea: Object,
   statistics: Object,
-  timeSeriesData: Array,
+  timeSeriesData: {
+    type: Array,
+    default: () => []
+  },
+  areaStatistics: {
+    type: Array,
+    default: () => []
+  }
 })
 
-// Reactive data
 const activeTab = ref('overview')
-const pieChartCanvas = ref(null)
-const barChartCanvas = ref(null)
-const lineChartCanvas = ref(null)
-let pieChart = null
-let barChart = null
-let lineChart = null
 
-// Tabs
 const tabs = [
   { id: 'overview', name: 'Overview' },
   { id: 'distribution', name: 'Area Distribution' },
@@ -186,170 +290,277 @@ const tabs = [
   { id: 'factors', name: 'RUSLE Factors' },
 ]
 
-// Computed properties
-const stats = computed(() => {
-  if (!props.statistics) {
+const pieChartRefs = ref({})
+const barChartRefs = ref({})
+const lineChartCanvas = ref(null)
+
+const pieCharts = new Map()
+const barCharts = new Map()
+let lineChart = null
+
+const areaTypeLabels = {
+  country: 'Country',
+  region: 'Region',
+  district: 'District',
+}
+
+const areaBadgeClasses = {
+  country: 'bg-blue-100 text-blue-700',
+  region: 'bg-purple-100 text-purple-700',
+  district: 'bg-emerald-100 text-emerald-700',
+  default: 'bg-gray-100 text-gray-600',
+}
+
+const defaultSeverity = [
+  { class: 'Very Low', area: 0, percentage: 0 },
+  { class: 'Low', area: 0, percentage: 0 },
+  { class: 'Moderate', area: 0, percentage: 0 },
+  { class: 'Severe', area: 0, percentage: 0 },
+  { class: 'Excessive', area: 0, percentage: 0 },
+]
+
+const defaultRusleFactors = [
+  { id: 'r', name: 'R-Factor', description: 'Rainfall Erosivity', unit: 'MJ mm/(ha h yr)' },
+  { id: 'k', name: 'K-Factor', description: 'Soil Erodibility', unit: 't ha h/(ha MJ mm)' },
+  { id: 'ls', name: 'LS-Factor', description: 'Topographic', unit: 'dimensionless' },
+  { id: 'c', name: 'C-Factor', description: 'Cover Management', unit: '0-1' },
+  { id: 'p', name: 'P-Factor', description: 'Support Practice', unit: '0-1' },
+]
+
+const formatNumber = (value, digits = 2) => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) {
+    return (0).toFixed(digits)
+  }
+  return num.toFixed(digits)
+}
+
+const resolveAreaType = (area, fallbackType) => {
+  if (area?.area_type) return area.area_type
+  if (area?.id === 0) return 'country'
+  if (area?.region_id) return 'district'
+  if (area?.type === 'region' || fallbackType === 'region') return 'region'
+  return fallbackType || 'region'
+}
+
+const displayEntries = computed(() => {
+  if (props.areaStatistics && props.areaStatistics.length > 0) {
+    return props.areaStatistics.map((entry, index) => {
+      const area = entry.area || {}
+      const areaType = resolveAreaType(area, entry.areaType)
+      const name =
+        area.name_en ||
+        area.name ||
+        (areaType === 'country' ? 'Country' : `Area ${index + 1}`)
+
+      return {
+        key: entry.key || `${areaType}-${area.id ?? index}`,
+        area,
+        areaType,
+        areaName: name,
+        statistics: entry.statistics || {},
+        timeSeries: Array.isArray(entry.timeSeries) ? entry.timeSeries : [],
+      }
+    })
+  }
+
+  if (props.statistics) {
+    const area = props.selectedArea || {}
+    const areaType = resolveAreaType(area, area.type)
+    const name =
+      area.name_en ||
+      area.name ||
+      (areaType === 'country' ? 'Country' : 'Selected Area')
+
+    return [
+      {
+        key: area.id != null ? `area-${area.id}` : 'primary-area',
+        area,
+        areaType,
+        areaName: name,
+        statistics: props.statistics,
+        timeSeries: props.timeSeriesData || [],
+      },
+    ]
+  }
+
+  return []
+})
+
+const formattedEntries = computed(() =>
+  displayEntries.value.map((entry, index) => {
+    const stats = entry.statistics || {}
+    const severityRaw =
+      Array.isArray(stats.severityDistribution) && stats.severityDistribution.length
+        ? stats.severityDistribution
+        : Array.isArray(stats.severity_distribution) && stats.severity_distribution.length
+        ? stats.severity_distribution
+        : defaultSeverity
+
+    const severityDistribution = severityRaw.map((item) => ({
+      class: item.class || item.name || 'Class',
+      area: Number(item.area ?? 0),
+      percentage: Number(item.percentage ?? 0),
+    }))
+
+    const hasSeverityData = severityDistribution.some((item) => item.percentage > 0)
+
+    const topAreasRaw = Array.isArray(stats.topErodingAreas)
+      ? stats.topErodingAreas
+      : []
+
+    const topErodingAreas = topAreasRaw
+      .filter((item) => item && (item.name || item.name_en || item.name_tj))
+      .map((item) => ({
+        name: item.name || item.name_en || item.name_tj || 'Unknown',
+        erosion: Number(item.erosion || item.erosion_rate || item.mean_erosion_rate || 0),
+      }))
+
+    const rusleRaw = stats.rusleFactors || stats.rusle_factors || {}
+    const rusleFactors = defaultRusleFactors.map((factor) => {
+      const rawValue = Number(rusleRaw[factor.id] ?? 0)
+      const decimals = ['k', 'c', 'p'].includes(factor.id) ? 3 : 2
+      return {
+        ...factor,
+        value: formatNumber(rawValue, decimals),
+      }
+    })
+
+    const rainfallSlope = Number(stats.rainfallSlope ?? 0)
+    const rainfallCV = Number(stats.rainfallCV ?? 0)
+
+    const entryTimeSeries = Array.isArray(entry.timeSeries) ? entry.timeSeries : []
+
     return {
-      erosion: { mean: 0, min: 0, max: 0, cv: 0 },
-      rainfall: { slope: 0, cv: 0 },
+      key: entry.key,
+      areaName: entry.areaName,
+      areaType: entry.areaType,
+      areaTypeLabel: areaTypeLabels[entry.areaType] || 'Area',
+      badgeClass: areaBadgeClasses[entry.areaType] || areaBadgeClasses.default,
+      erosion: {
+        mean: formatNumber(stats.meanErosionRate ?? 0, 2),
+        min: formatNumber(stats.minErosionRate ?? 0, 2),
+        max: formatNumber(stats.maxErosionRate ?? 0, 2),
+        cv: formatNumber(stats.erosionCV ?? 0, 1),
+      },
+      rainfall: {
+        slope: formatNumber(rainfallSlope, 2),
+        cv: formatNumber(rainfallCV, 1),
+      },
+      severityDistribution,
+      hasSeverityData,
+      topErodingAreas,
+      hasTopAreas: topErodingAreas.length > 0,
+      rusleFactors,
+      timeSeries:
+        entryTimeSeries.length > 0
+          ? entryTimeSeries
+          : index === 0
+          ? props.timeSeriesData || []
+          : [],
     }
-  }
+  })
+)
 
-  return {
-    erosion: {
-      mean: parseFloat(props.statistics.meanErosionRate || 0).toFixed(2),
-      min: parseFloat(props.statistics.minErosionRate || 0).toFixed(2),
-      max: parseFloat(props.statistics.maxErosionRate || 0).toFixed(2),
-      cv: parseFloat(props.statistics.erosionCV || 0).toFixed(1),
-    },
-    rainfall: {
-      slope: parseFloat(props.statistics.rainfallSlope || 0).toFixed(2),
-      cv: parseFloat(props.statistics.rainfallCV || 0).toFixed(1),
-    },
+const primaryTimeSeries = computed(() => {
+  if (!formattedEntries.value.length) {
+    return []
   }
+  return formattedEntries.value[0].timeSeries || []
 })
 
-const severityDistribution = computed(() => {
-  if (!props.statistics || !props.statistics.severityDistribution) {
-    return [
-      { class: 'Very Low', area: 0, percentage: 0 },
-      { class: 'Low', area: 0, percentage: 0 },
-      { class: 'Moderate', area: 0, percentage: 0 },
-      { class: 'Severe', area: 0, percentage: 0 },
-      { class: 'Excessive', area: 0, percentage: 0 },
-    ]
-  }
+const primaryAreaName = computed(() => formattedEntries.value[0]?.areaName || 'Selected Area')
 
-  return props.statistics.severityDistribution
+const panelSubtitle = computed(() => {
+  if (!formattedEntries.value.length) return ''
+  if (formattedEntries.value.length === 1) return formattedEntries.value[0].areaName
+  return `${formattedEntries.value.length} areas selected`
 })
 
-const rusleFactors = computed(() => {
-  if (!props.statistics || !props.statistics.rusleFactors) {
-    return [
-      { id: 'r', name: 'R-Factor', description: 'Rainfall Erosivity', value: '0.0', unit: 'MJ mm/(ha h yr)' },
-      { id: 'k', name: 'K-Factor', description: 'Soil Erodibility', value: '0.0', unit: 't ha h/(ha MJ mm)' },
-      { id: 'ls', name: 'LS-Factor', description: 'Topographic', value: '0.0', unit: 'dimensionless' },
-      { id: 'c', name: 'C-Factor', description: 'Cover Management', value: '0.0', unit: '0-1' },
-      { id: 'p', name: 'P-Factor', description: 'Support Practice', value: '0.0', unit: '0-1' },
-    ]
-  }
-
-  const factors = props.statistics.rusleFactors
-  return [
-    { id: 'r', name: 'R-Factor', description: 'Rainfall Erosivity', value: factors.r?.toFixed(2) || '0.0', unit: 'MJ mm/(ha h yr)' },
-    { id: 'k', name: 'K-Factor', description: 'Soil Erodibility', value: factors.k?.toFixed(3) || '0.0', unit: 't ha h/(ha MJ mm)' },
-    { id: 'ls', name: 'LS-Factor', description: 'Topographic', value: factors.ls?.toFixed(2) || '0.0', unit: 'dimensionless' },
-    { id: 'c', name: 'C-Factor', description: 'Cover Management', value: factors.c?.toFixed(3) || '0.0', unit: '0-1' },
-    { id: 'p', name: 'P-Factor', description: 'Support Practice', value: factors.p?.toFixed(3) || '0.0', unit: '0-1' },
-  ]
-})
-
-// Methods
 const getSeverityColorClass = (className) => {
   const colorMap = {
     'Very Low': 'text-green-700 font-medium',
-    'Low': 'text-yellow-700 font-medium',
-    'Moderate': 'text-orange-700 font-medium',
-    'Severe': 'text-red-700 font-medium',
-    'Excessive': 'text-red-900 font-medium',
+    Low: 'text-yellow-700 font-medium',
+    Moderate: 'text-orange-700 font-medium',
+    Severe: 'text-red-700 font-medium',
+    Excessive: 'text-red-900 font-medium',
   }
   return colorMap[className] || 'text-gray-700'
 }
 
-const MAX_RENDER_RETRIES = 6
+const setPieChartRef = (key, el) => {
+  if (el) {
+    pieChartRefs.value[key] = el
+  } else {
+    delete pieChartRefs.value[key]
+  }
+}
 
-const createPieChart = (retry = 0) => {
-  const canvas = pieChartCanvas.value
+const setBarChartRef = (key, el) => {
+  if (el) {
+    barChartRefs.value[key] = el
+  } else {
+    delete barChartRefs.value[key]
+  }
+}
 
-  if (!canvas) {
-    console.warn('Pie chart canvas not available')
+const destroyChartMap = (chartMap) => {
+  chartMap.forEach((chart) => chart.destroy())
+  chartMap.clear()
+}
+
+const createPieCharts = () => {
+  if (activeTab.value !== 'distribution') {
+    destroyChartMap(pieCharts)
     return
   }
 
-  if (!canvas.isConnected || !canvas.parentElement) {
-    if (retry < MAX_RENDER_RETRIES) {
-      return requestAnimationFrame(() => createPieChart(retry + 1))
-    }
-    console.warn('Pie chart canvas not connected to DOM')
-    return
-  }
+  const seen = new Set()
 
-  const { width, height } = canvas.getBoundingClientRect()
-  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
-    return requestAnimationFrame(() => createPieChart(retry + 1))
-  }
-
-  if (width === 0 || height === 0) {
-    console.warn('Pie chart canvas has zero size after retries, rendering anyway')
-  }
-
-  if (pieChart) {
-    pieChart.destroy()
-    pieChart = null
-  }
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    console.error('Could not get 2d context from canvas')
-    return
-  }
-
-  const data = severityDistribution.value
-  
-  // Ensure we have valid data structure
-  if (!data || !Array.isArray(data) || data.length === 0) {
-    console.warn('No severity distribution data available')
-    // Create chart with zero data to show empty state
-    pieChart = new Chart(ctx, {
-      type: 'pie',
-      data: {
-        labels: ['No Data'],
-        datasets: [{
-          data: [100],
-          backgroundColor: ['rgba(200, 200, 200, 0.5)'],
-          borderWidth: 1,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            position: 'right',
-          },
-          tooltip: {
-            enabled: false
-          }
-        }
+  formattedEntries.value.forEach((entry) => {
+    if (!entry.hasSeverityData) {
+      if (pieCharts.has(entry.key)) {
+        pieCharts.get(entry.key).destroy()
+        pieCharts.delete(entry.key)
       }
-    })
-    return
-  }
+      return
+    }
 
-  // Validate data structure
-  const validData = data.filter(d => d && d.class && typeof d.percentage === 'number')
-  
-  if (validData.length === 0) {
-    console.warn('No valid severity distribution data')
-    return
-  }
+    const canvas = pieChartRefs.value[entry.key]
+    if (!canvas || canvas.offsetWidth === 0) {
+      return
+    }
 
-  try {
-    pieChart = new Chart(ctx, {
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      return
+    }
+
+    if (pieCharts.has(entry.key)) {
+      pieCharts.get(entry.key).destroy()
+    }
+
+    const labels = entry.severityDistribution.map((item) => item.class)
+    const data = entry.severityDistribution.map((item) => item.percentage)
+    const colors = [
+      'rgba(34, 139, 34, 0.8)',
+      'rgba(255, 215, 0, 0.8)',
+      'rgba(255, 140, 0, 0.8)',
+      'rgba(220, 20, 60, 0.8)',
+      'rgba(139, 0, 0, 0.9)',
+    ]
+
+    const chart = new Chart(ctx, {
       type: 'pie',
       data: {
-        labels: validData.map(d => d.class),
-        datasets: [{
-          data: validData.map(d => d.percentage),
-          backgroundColor: [
-            'rgba(34, 139, 34, 0.8)',
-            'rgba(255, 215, 0, 0.8)',
-            'rgba(255, 140, 0, 0.8)',
-            'rgba(220, 20, 60, 0.8)',
-            'rgba(139, 0, 0, 0.9)',
-          ].slice(0, validData.length),
-          borderWidth: 1,
-        }],
+        labels,
+        datasets: [
+          {
+            data,
+            backgroundColor: colors.slice(0, labels.length),
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
@@ -360,132 +571,74 @@ const createPieChart = (retry = 0) => {
           },
           tooltip: {
             callbacks: {
-              label: function(context) {
+              label(context) {
                 return `${context.label}: ${context.parsed.toFixed(1)}%`
-              }
-            }
-          }
-        }
-      }
+              },
+            },
+          },
+        },
+      },
     })
-  } catch (error) {
-    console.error('Error creating pie chart:', error)
+
+    pieCharts.set(entry.key, chart)
+    seen.add(entry.key)
+  })
+
+  for (const [key, chart] of pieCharts.entries()) {
+    if (!seen.has(key)) {
+      chart.destroy()
+      pieCharts.delete(key)
+    }
   }
 }
 
-const createBarChart = (retry = 0) => {
-  const canvas = barChartCanvas.value
-
-  if (!canvas) {
-    console.warn('Bar chart canvas not available')
+const createBarCharts = () => {
+  if (activeTab.value !== 'charts') {
+    destroyChartMap(barCharts)
     return
   }
 
-  if (!canvas.isConnected || !canvas.parentElement) {
-    if (retry < MAX_RENDER_RETRIES) {
-      return requestAnimationFrame(() => createBarChart(retry + 1))
+  const seen = new Set()
+
+  formattedEntries.value.forEach((entry) => {
+    if (!entry.hasTopAreas) {
+      if (barCharts.has(entry.key)) {
+        barCharts.get(entry.key).destroy()
+        barCharts.delete(entry.key)
+      }
+      return
     }
-    console.warn('Bar chart canvas not connected to DOM')
-    return
-  }
 
-  const { width, height } = canvas.getBoundingClientRect()
-  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
-    return requestAnimationFrame(() => createBarChart(retry + 1))
-  }
-
-  if (width === 0 || height === 0) {
-    console.warn('Bar chart canvas has zero size after retries, rendering anyway')
-  }
-
-  if (barChart) {
-    barChart.destroy()
-    barChart = null
-  }
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    console.error('Could not get 2d context from canvas')
-    return
-  }
-
-  // Get real data from statistics if available
-  let topAreas = []
-  
-  if (props.statistics && props.statistics.topErodingAreas) {
-    // Use real data from backend
-    topAreas = Array.isArray(props.statistics.topErodingAreas) 
-      ? props.statistics.topErodingAreas 
-      : []
-    
-    // Validate and filter valid entries
-    topAreas = topAreas.filter(area => 
-      area && 
-      (area.name || area.name_en || area.name_tj) && 
-      typeof (area.erosion || area.erosion_rate || area.mean_erosion_rate) === 'number'
-    ).map(area => ({
-      name: area.name || area.name_en || area.name_tj || 'Unknown',
-      erosion: area.erosion || area.erosion_rate || area.mean_erosion_rate || 0
-    }))
-  }
-  
-  // No mock data - only show real data or empty state
-
-  // If no data available, show empty state
-  if (topAreas.length === 0) {
-    try {
-      barChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: ['No Data Available'],
-          datasets: [{
-            label: 'Erosion Rate (t/ha/yr)',
-            data: [0],
-            backgroundColor: 'rgba(200, 200, 200, 0.5)',
-            borderColor: 'rgba(200, 200, 200, 0.8)',
-            borderWidth: 1,
-          }],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: true,
-          scales: {
-            y: {
-              beginAtZero: true,
-              title: {
-                display: true,
-                text: 'Erosion Rate (t/ha/yr)'
-              }
-            }
-          },
-          plugins: {
-            legend: {
-              display: false,
-            },
-            tooltip: {
-              enabled: false
-            }
-          }
-        }
-      })
-    } catch (error) {
-      console.error('Error creating empty bar chart:', error)
+    const canvas = barChartRefs.value[entry.key]
+    if (!canvas || canvas.offsetWidth === 0) {
+      return
     }
-    return
-  }
 
-  try {
-    barChart = new Chart(ctx, {
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      return
+    }
+
+    if (barCharts.has(entry.key)) {
+      barCharts.get(entry.key).destroy()
+    }
+
+    const labels = entry.topErodingAreas.map((item) => item.name)
+    const data = entry.topErodingAreas.map((item) => item.erosion)
+
+    const chart = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: topAreas.map(d => d.name),
-        datasets: [{
-          label: 'Erosion Rate (t/ha/yr)',
-          data: topAreas.map(d => d.erosion),
-          backgroundColor: 'rgba(220, 20, 60, 0.7)',
-          borderColor: 'rgba(220, 20, 60, 1)',
-          borderWidth: 1,
-        }],
+        labels,
+        datasets: [
+          {
+            label: 'Erosion Rate (t/ha/yr)',
+            data,
+            backgroundColor: 'rgba(220, 20, 60, 0.7)',
+            borderColor: 'rgba(220, 20, 60, 1)',
+            borderWidth: 1,
+          },
+        ],
       },
       options: {
         responsive: true,
@@ -495,70 +648,79 @@ const createBarChart = (retry = 0) => {
             beginAtZero: true,
             title: {
               display: true,
-              text: 'Erosion Rate (t/ha/yr)'
-            }
-          }
+              text: 'Erosion Rate (t/ha/yr)',
+            },
+          },
         },
         plugins: {
           legend: {
             display: false,
-          }
-        }
-      }
+          },
+        },
+      },
     })
-  } catch (error) {
-    console.error('Error creating bar chart:', error)
+
+    barCharts.set(entry.key, chart)
+    seen.add(entry.key)
+  })
+
+  for (const [key, chart] of barCharts.entries()) {
+    if (!seen.has(key)) {
+      chart.destroy()
+      barCharts.delete(key)
+    }
   }
 }
 
-const createLineChart = (retry = 0) => {
-  if (!props.timeSeriesData || props.timeSeriesData.length === 0) return
-
-  const canvas = lineChartCanvas.value
-  if (!canvas) {
-    console.warn('Line chart canvas not available')
-    return
-  }
-
-  if (!canvas.isConnected || !canvas.parentElement) {
-    if (retry < MAX_RENDER_RETRIES) {
-      return requestAnimationFrame(() => createLineChart(retry + 1))
+const createLineChart = () => {
+  if (activeTab.value !== 'charts') {
+    if (lineChart) {
+      lineChart.destroy()
+      lineChart = null
     }
-    console.warn('Line chart canvas not connected to DOM')
     return
   }
 
-  const { width, height } = canvas.getBoundingClientRect()
-  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
-    return requestAnimationFrame(() => createLineChart(retry + 1))
+  const series = primaryTimeSeries.value
+  if (!series || !series.length) {
+    if (lineChart) {
+      lineChart.destroy()
+      lineChart = null
+    }
+    return
   }
 
-  if (width === 0 || height === 0) {
-    console.warn('Line chart canvas has zero size after retries, rendering anyway')
+  if (!lineChartCanvas.value || lineChartCanvas.value.offsetWidth === 0) {
+    return
   }
+
+  const ctx = lineChartCanvas.value.getContext('2d')
+  if (!ctx) return
 
   if (lineChart) {
     lineChart.destroy()
   }
 
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    console.error('Could not get 2d context from line chart canvas')
-    return
-  }
-
   lineChart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: props.timeSeriesData.map(d => d.year),
-      datasets: [{
-        label: 'Erosion Rate',
-        data: props.timeSeriesData.map(d => d.erosionRate),
-        borderColor: 'rgba(59, 130, 246, 1)',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-        tension: 0.3,
-        fill: true,
-      }],
+      labels: series.map((item) => item.year),
+      datasets: [
+        {
+          label: 'Erosion Rate (t/ha/yr)',
+          data: series.map(
+            (item) =>
+              item.erosionRate ??
+              item.erosion_rate ??
+              item.value ??
+              0
+          ),
+          borderColor: 'rgba(59, 130, 246, 1)',
+          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          tension: 0.3,
+          fill: true,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -568,106 +730,107 @@ const createLineChart = (retry = 0) => {
           beginAtZero: true,
           title: {
             display: true,
-            text: 'Erosion Rate (t/ha/yr)'
-          }
+            text: 'Erosion Rate (t/ha/yr)',
+          },
         },
         x: {
           title: {
             display: true,
-            text: 'Year'
-          }
-        }
-      }
-    }
+            text: 'Year',
+          },
+        },
+      },
+    },
   })
 }
 
+const scheduleChartRender = () => {
+  nextTick(() => {
+    createPieCharts()
+    createBarCharts()
+    createLineChart()
+  })
+}
+
+watch(() => activeTab.value, scheduleChartRender)
+watch(formattedEntries, scheduleChartRender, { deep: true })
+watch(() => props.areaStatistics, scheduleChartRender, { deep: true })
+watch(() => props.statistics, scheduleChartRender, { deep: true })
+watch(() => props.timeSeriesData, scheduleChartRender, { deep: true })
+
+onMounted(scheduleChartRender)
+
+onBeforeUnmount(() => {
+  destroyChartMap(pieCharts)
+  destroyChartMap(barCharts)
+  if (lineChart) {
+    lineChart.destroy()
+    lineChart = null
+  }
+})
+
 const exportPNG = () => {
-  // This would export the current view as PNG
-  alert('PNG export feature - to be implemented with map canvas capture')
+  alert('PNG export feature will capture the statistics view in a future update.')
 }
 
 const exportCSV = () => {
-  if (!props.statistics) return
+  if (!formattedEntries.value.length) return
 
-  const csvData = []
-  
-  // Header
-  csvData.push(['Statistic', 'Value', 'Unit'])
-  
-  // Basic stats
-  csvData.push(['Area Name', props.selectedArea?.name || props.selectedArea?.name_en || 'N/A', ''])
-  csvData.push(['Mean Erosion Rate', stats.value.erosion.mean, 't/ha/yr'])
-  csvData.push(['Min Erosion Rate', stats.value.erosion.min, 't/ha/yr'])
-  csvData.push(['Max Erosion Rate', stats.value.erosion.max, 't/ha/yr'])
-  csvData.push(['Erosion CV', stats.value.erosion.cv, '%'])
-  csvData.push(['Rainfall Slope', stats.value.rainfall.slope, '% per year'])
-  csvData.push(['Rainfall CV', stats.value.rainfall.cv, '%'])
-  csvData.push([])
-  
-  // Severity distribution
-  csvData.push(['Severity Class', 'Area (ha)', 'Percentage'])
-  severityDistribution.value.forEach(item => {
-    csvData.push([item.class, item.area, `${item.percentage.toFixed(1)}%`])
+  const csvRows = []
+
+  formattedEntries.value.forEach((entry, index) => {
+    csvRows.push([`Area`, entry.areaName, entry.areaTypeLabel])
+    csvRows.push(['Mean Erosion Rate', entry.erosion.mean, 't/ha/yr'])
+    csvRows.push(['Min Erosion Rate', entry.erosion.min, 't/ha/yr'])
+    csvRows.push(['Max Erosion Rate', entry.erosion.max, 't/ha/yr'])
+    csvRows.push(['Erosion CV', entry.erosion.cv, '%'])
+    csvRows.push(['Rainfall Trend', entry.rainfall.slope, '%'])
+    csvRows.push(['Rainfall CV', entry.rainfall.cv, '%'])
+    csvRows.push([])
+
+    csvRows.push(['Severity Class', 'Area (ha)', 'Percentage'])
+    entry.severityDistribution.forEach((item) => {
+      csvRows.push([
+        item.class,
+        item.area.toFixed(1),
+        `${item.percentage.toFixed(1)}%`,
+      ])
+    })
+    csvRows.push([])
+
+    csvRows.push(['RUSLE Factor', 'Value', 'Unit'])
+    entry.rusleFactors.forEach((factor) => {
+      csvRows.push([factor.name, factor.value, factor.unit])
+    })
+
+    if (entry.hasTopAreas) {
+      csvRows.push([])
+      csvRows.push(['Top Area', 'Erosion Rate (t/ha/yr)'])
+      entry.topErodingAreas.forEach((area) => {
+        csvRows.push([area.name, area.erosion.toFixed(2)])
+      })
+    }
+
+    if (index < formattedEntries.value.length - 1) {
+      csvRows.push([])
+    }
   })
-  csvData.push([])
-  
-  // RUSLE factors
-  csvData.push(['RUSLE Factor', 'Value', 'Unit'])
-  rusleFactors.value.forEach(factor => {
-    csvData.push([factor.name, factor.value, factor.unit])
-  })
-  
-  // Convert to CSV string
-  const csvString = csvData.map(row => row.join(',')).join('\n')
-  
-  // Create blob and download
+
+  const csvString = csvRows.map((row) => row.join(',')).join('\n')
+
   const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   const url = URL.createObjectURL(blob)
   link.setAttribute('href', url)
-  link.setAttribute('download', `rusle-statistics-${new Date().toISOString().split('T')[0]}.csv`)
+  link.setAttribute(
+    'download',
+    `rusle-statistics-${new Date().toISOString().split('T')[0]}.csv`
+  )
   link.style.visibility = 'hidden'
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
 }
-
-// Watchers
-watch(() => activeTab.value, async (newTab) => {
-  await nextTick()
-  // Add small delay to ensure DOM is fully updated
-  setTimeout(() => {
-    if (newTab === 'distribution') {
-      createPieChart()
-    } else if (newTab === 'charts') {
-      createBarChart()
-      createLineChart()
-    }
-  }, 100)
-})
-
-watch(() => props.statistics, () => {
-  // Add delay to ensure canvas is ready
-  setTimeout(() => {
-    if (activeTab.value === 'distribution') {
-      createPieChart()
-    } else if (activeTab.value === 'charts') {
-      createBarChart()
-      createLineChart()
-    }
-  }, 100)
-}, { deep: true })
-
-// Lifecycle
-onMounted(() => {
-  // Wait for DOM to be fully ready
-  setTimeout(() => {
-    if (activeTab.value === 'distribution') {
-      createPieChart()
-    }
-  }, 200)
-})
 </script>
 
 <style scoped>

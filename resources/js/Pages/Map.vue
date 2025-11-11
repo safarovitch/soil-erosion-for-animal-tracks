@@ -272,6 +272,7 @@
                         <StatisticsPanel
                             :selected-area="selectedArea"
                             :statistics="statistics"
+                            :area-statistics="areaStatistics"
                             :time-series-data="timeSeriesData"
                         />
 
@@ -616,9 +617,6 @@ const applySelection = async () => {
         }
     }
 
-    const primaryArea = areasToApply[0] || null;
-    selectedArea.value = primaryArea || null;
-
     analysisTrigger.value += 1;
     needsApply.value = false;
 
@@ -631,6 +629,49 @@ const applySelection = async () => {
             bottomPanelVisible.value = true;
         }
 
+        let analysisAreas = [...areasToApply];
+
+        const totalRegions = regions.value.length;
+        const selectedRegionsOnly =
+            analysisAreas.length > 0 &&
+            analysisAreas.every((area) => {
+                if (area.area_type === "country" || area.type === "country") {
+                    return false;
+                }
+
+                const areaType =
+                    area.area_type ||
+                    (area.region_id
+                        ? "district"
+                        : area.type === "region"
+                        ? "region"
+                        : null);
+                return areaType === "region";
+            });
+
+        if (
+            selectedRegionsOnly &&
+            totalRegions > 0 &&
+            analysisAreas.length === totalRegions
+        ) {
+            const countryBoundary =
+                mapView.value?.getCountryBoundary?.() || null;
+
+            analysisAreas = [
+                {
+                    id: 0,
+                    type: "country",
+                    area_type: "country",
+                    name_en: "Tajikistan",
+                    name_tj: "Тоҷикистон",
+                    geometry: countryBoundary,
+                },
+            ];
+        }
+
+        const primaryArea = analysisAreas[0] || null;
+        selectedArea.value = primaryArea || null;
+
         loading.value = true;
         progress.value = 0;
         loadingMessage.value = "Calculating RUSLE statistics...";
@@ -638,11 +679,11 @@ const applySelection = async () => {
         const results = [];
 
         try {
-            for (let index = 0; index < areasToApply.length; index++) {
+            for (let index = 0; index < analysisAreas.length; index++) {
                 const result = await loadAreaStatistics(
-                    areasToApply[index],
+                    analysisAreas[index],
                     index,
-                    areasToApply.length
+                    analysisAreas.length
                 );
 
                 if (result) {
@@ -650,12 +691,13 @@ const applySelection = async () => {
                 }
 
                 progress.value = Math.round(
-                    ((index + 1) / areasToApply.length) * 100
+                    ((index + 1) / analysisAreas.length) * 100
                 );
             }
 
             areaStatistics.value = results;
-            statistics.value = results[0]?.statistics || null;
+            statistics.value =
+                results.length === 1 ? results[0]?.statistics || null : null;
         } finally {
             setTimeout(() => {
                 loading.value = false;
