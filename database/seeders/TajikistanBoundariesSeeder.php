@@ -54,6 +54,7 @@ class TajikistanBoundariesSeeder extends Seeder
         'Vakhsh District' => 'TJ-KT',
         "Vose' District" => 'TJ-KT',
         'Yovon District' => 'TJ-KT',
+        'Nosiri Khusrav District' => 'TJ-KT',
         
         // Gorno-Badakhshan Autonomous Region (GBAO)
         'Darvoz District' => 'TJ-GB',
@@ -63,7 +64,6 @@ class TajikistanBoundariesSeeder extends Seeder
         'Rushon District' => 'TJ-GB',
         'Shughnon District' => 'TJ-GB',
         'Vanj District' => 'TJ-GB',
-        'Nosiri Khusrav District' => 'TJ-GB',
         
         // Districts of Republican Subordination (DRS)
         'Faizobod District' => 'TJ-RA',
@@ -73,7 +73,7 @@ class TajikistanBoundariesSeeder extends Seeder
         'Rasht District' => 'TJ-RA',
         'Roghun District' => 'TJ-RA',
         'Rudaki District' => 'TJ-RA',
-        'Sarband District' => 'TJ-RA',
+        'Sarband District' => 'TJ-KT',
         'Sharinav District' => 'TJ-RA',
         'Tavildara District' => 'TJ-RA',
         'Tojikobod District' => 'TJ-RA',

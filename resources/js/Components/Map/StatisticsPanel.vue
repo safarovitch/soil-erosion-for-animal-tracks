@@ -256,16 +256,31 @@ const getSeverityColorClass = (className) => {
   return colorMap[className] || 'text-gray-700'
 }
 
-const createPieChart = () => {
-  if (!pieChartCanvas.value) {
+const MAX_RENDER_RETRIES = 6
+
+const createPieChart = (retry = 0) => {
+  const canvas = pieChartCanvas.value
+
+  if (!canvas) {
     console.warn('Pie chart canvas not available')
     return
   }
 
-  // Check if canvas is actually in DOM and has dimensions
-  if (!pieChartCanvas.value.parentElement || pieChartCanvas.value.offsetWidth === 0) {
-    console.warn('Pie chart canvas not visible or has no dimensions')
+  if (!canvas.isConnected || !canvas.parentElement) {
+    if (retry < MAX_RENDER_RETRIES) {
+      return requestAnimationFrame(() => createPieChart(retry + 1))
+    }
+    console.warn('Pie chart canvas not connected to DOM')
     return
+  }
+
+  const { width, height } = canvas.getBoundingClientRect()
+  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
+    return requestAnimationFrame(() => createPieChart(retry + 1))
+  }
+
+  if (width === 0 || height === 0) {
+    console.warn('Pie chart canvas has zero size after retries, rendering anyway')
   }
 
   if (pieChart) {
@@ -273,7 +288,7 @@ const createPieChart = () => {
     pieChart = null
   }
 
-  const ctx = pieChartCanvas.value.getContext('2d')
+  const ctx = canvas.getContext('2d')
   if (!ctx) {
     console.error('Could not get 2d context from canvas')
     return
@@ -358,16 +373,29 @@ const createPieChart = () => {
   }
 }
 
-const createBarChart = () => {
-  if (!barChartCanvas.value) {
+const createBarChart = (retry = 0) => {
+  const canvas = barChartCanvas.value
+
+  if (!canvas) {
     console.warn('Bar chart canvas not available')
     return
   }
 
-  // Check if canvas is actually in DOM and has dimensions
-  if (!barChartCanvas.value.parentElement || barChartCanvas.value.offsetWidth === 0) {
-    console.warn('Bar chart canvas not visible or has no dimensions')
+  if (!canvas.isConnected || !canvas.parentElement) {
+    if (retry < MAX_RENDER_RETRIES) {
+      return requestAnimationFrame(() => createBarChart(retry + 1))
+    }
+    console.warn('Bar chart canvas not connected to DOM')
     return
+  }
+
+  const { width, height } = canvas.getBoundingClientRect()
+  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
+    return requestAnimationFrame(() => createBarChart(retry + 1))
+  }
+
+  if (width === 0 || height === 0) {
+    console.warn('Bar chart canvas has zero size after retries, rendering anyway')
   }
 
   if (barChart) {
@@ -375,12 +403,12 @@ const createBarChart = () => {
     barChart = null
   }
 
-  const ctx = barChartCanvas.value.getContext('2d')
+  const ctx = canvas.getContext('2d')
   if (!ctx) {
     console.error('Could not get 2d context from canvas')
     return
   }
-  
+
   // Get real data from statistics if available
   let topAreas = []
   
@@ -483,14 +511,41 @@ const createBarChart = () => {
   }
 }
 
-const createLineChart = () => {
-  if (!lineChartCanvas.value || !props.timeSeriesData) return
+const createLineChart = (retry = 0) => {
+  if (!props.timeSeriesData || props.timeSeriesData.length === 0) return
+
+  const canvas = lineChartCanvas.value
+  if (!canvas) {
+    console.warn('Line chart canvas not available')
+    return
+  }
+
+  if (!canvas.isConnected || !canvas.parentElement) {
+    if (retry < MAX_RENDER_RETRIES) {
+      return requestAnimationFrame(() => createLineChart(retry + 1))
+    }
+    console.warn('Line chart canvas not connected to DOM')
+    return
+  }
+
+  const { width, height } = canvas.getBoundingClientRect()
+  if ((width === 0 || height === 0) && retry < MAX_RENDER_RETRIES) {
+    return requestAnimationFrame(() => createLineChart(retry + 1))
+  }
+
+  if (width === 0 || height === 0) {
+    console.warn('Line chart canvas has zero size after retries, rendering anyway')
+  }
 
   if (lineChart) {
     lineChart.destroy()
   }
 
-  const ctx = lineChartCanvas.value.getContext('2d')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    console.error('Could not get 2d context from line chart canvas')
+    return
+  }
 
   lineChart = new Chart(ctx, {
     type: 'line',

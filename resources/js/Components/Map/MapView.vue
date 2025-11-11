@@ -123,8 +123,8 @@ const selectedAreaStyle = new Style({
         color: "rgba(0, 0, 0, 0.1)", // Black fill
     }),
     stroke: new Stroke({
-        color: "rgba(0, 92, 125, 1)", // Black outline
-        width: 2,
+        color: "rgba(0, 92, 125, .4)", // Black outline
+        width: 1,
     }),
 });
 

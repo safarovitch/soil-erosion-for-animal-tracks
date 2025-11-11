@@ -270,7 +270,9 @@
                     <div class="flex-1 overflow-y-auto p-6 pt-8">
                         <!-- Comprehensive Statistics Panel -->
                         <StatisticsPanel
-                            :area-stats="areaStatistics"
+                            :selected-area="selectedArea"
+                            :statistics="statistics"
+                            :time-series-data="timeSeriesData"
                         />
 
                         <!-- Erosion Risk Legend -->
