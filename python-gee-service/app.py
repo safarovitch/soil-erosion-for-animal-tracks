@@ -325,7 +325,7 @@ def compute_rusle_factors():
                 'description': 'Support Practice'
             }
         
-        # If all factors computed, also compute final soil erosion
+        # If all factors computed, also compute final soil erosion and severity breakdown
         soil_erosion = None
         if set(factors_to_compute) == set(valid_factors):
             logger.info("Computing final soil erosion (A = R × K × LS × C × P)...")
@@ -340,8 +340,50 @@ def compute_rusle_factors():
                 )
             else:
                 rusle_result = rusle_calculator.compute_rusle(start_year, geometry, scale=scale, compute_stats=True)
+
             soil_erosion = rusle_result['statistics']
-        
+
+            if soil_erosion:
+                try:
+                    breakdown = rusle_calculator.compute_erosion_class_breakdown(
+                        rusle_result['image'],
+                        geometry,
+                        scale=scale
+                    )
+
+                    class_labels = [
+                        ('very_low', 'Very Low'),
+                        ('low', 'Low'),
+                        ('moderate', 'Moderate'),
+                        ('severe', 'Severe'),
+                        ('excessive', 'Excessive'),
+                    ]
+
+                    severity_distribution = []
+                    for key, label in class_labels:
+                        class_info = breakdown.get(key, {}) or {}
+                        area_ha = float(class_info.get('area_hectares') or 0.0)
+                        percentage = float(class_info.get('percentage') or 0.0)
+                        severity_distribution.append(
+                            {
+                                'class': label,
+                                'area': round(area_ha, 2),
+                                'percentage': round(percentage, 2),
+                            }
+                        )
+
+                    soil_erosion['severity_distribution'] = severity_distribution
+                    soil_erosion['total_area_hectares'] = round(
+                        float(breakdown.get('total_area_hectares') or 0.0), 2
+                    )
+                    soil_erosion['erosion_class_breakdown'] = breakdown
+                except Exception as error:
+                    logger.warning(
+                        f"Failed to compute erosion class breakdown: {str(error)}",
+                        exc_info=True,
+                    )
+                    soil_erosion['severity_distribution'] = []
+ 
         period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
 
         return jsonify({

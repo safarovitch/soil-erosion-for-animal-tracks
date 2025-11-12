@@ -285,10 +285,7 @@
 <script setup>
 import { Head, Link, router } from '@inertiajs/vue3'
 import { ref, onMounted } from 'vue'
-import { useAuthStore } from '@/Stores/useAuthStore'
 import axios from 'axios'
-
-const authStore = useAuthStore()
 
 const filters = ref({
   dateRange: '',
@@ -399,10 +396,13 @@ const getAreaName = (query) => {
 
 const logout = async () => {
   try {
-    await authStore.logout()
-    router.visit('/')
+    await axios.post('/admin/logout')
   } catch (error) {
     console.error('Logout error:', error)
+  } finally {
+    localStorage.removeItem('sanctum_token')
+    delete axios.defaults.headers.common.Authorization
+    router.visit('/admin/login')
   }
 }
 

@@ -47,10 +47,12 @@ class ErosionTileService
 
         if ($map && $map->isAvailable()) {
             $statistics = $this->enrichStatistics($map->statistics ?? null, $map->metadata ?? null);
+            $components = $map->metadata['components'] ?? null;
             return [
                 'status' => 'available',
                 'tiles_url' => $map->tile_url,
                 'statistics' => $statistics,
+                'components' => is_array($components) ? $components : [],
                 'computed_at' => $map->computed_at?->toISOString(),
                 'start_year' => $startYear,
                 'end_year' => $endYear,
@@ -135,36 +137,35 @@ class ErosionTileService
             $taskId = $response->json('task_id');
 
             // Create or update database record
-            if ($existingMap) {
-                $metadata = $existingMap->metadata ?? [];
-                $metadata['task_id'] = $taskId;
-                $metadata['period'] = [
+            // Use updateOrCreate to handle race conditions where multiple requests
+            // might try to create the same record simultaneously
+            $metadata = [
+                'task_id' => $taskId,
+                'bbox' => $bbox,
+                'period' => [
                     'start_year' => $startYear,
                     'end_year' => $endYear,
                     'label' => $periodLabel,
-                ];
-                $existingMap->update([
-                    'status' => 'queued',
-                    'metadata' => $metadata,
-                    'error_message' => null
-                ]);
-            } else {
-                PrecomputedErosionMap::create([
+                ],
+            ];
+
+            // If we have an existing map, merge its existing metadata
+            if ($existingMap && is_array($existingMap->metadata)) {
+                $metadata = array_merge($existingMap->metadata, $metadata);
+            }
+
+            PrecomputedErosionMap::updateOrCreate(
+                [
                     'area_type' => $areaType,
                     'area_id' => $areaId,
                     'year' => $startYear,
+                ],
+                [
                     'status' => 'queued',
-                    'metadata' => [
-                        'task_id' => $taskId,
-                        'bbox' => $bbox,
-                        'period' => [
-                            'start_year' => $startYear,
-                            'end_year' => $endYear,
-                            'label' => $periodLabel,
-                        ],
-                    ]
-                ]);
-            }
+                    'metadata' => $metadata,
+                    'error_message' => null
+                ]
+            );
 
             Log::info("Task queued with ID: {$taskId}");
 
@@ -200,7 +201,31 @@ class ErosionTileService
             $statistics = $statistics === null ? [] : (array) $statistics;
         }
 
-        $rainfallStats = $metadata['rainfall_statistics'] ?? null;
+        if (isset($statistics['mean']) && !isset($statistics['meanErosionRate'])) {
+            $statistics['meanErosionRate'] = (float) $statistics['mean'];
+        }
+
+        if (isset($statistics['min']) && !isset($statistics['minErosionRate'])) {
+            $statistics['minErosionRate'] = (float) $statistics['min'];
+        }
+
+        if (isset($statistics['max']) && !isset($statistics['maxErosionRate'])) {
+            $statistics['maxErosionRate'] = (float) $statistics['max'];
+        }
+
+        if (!isset($statistics['erosionCV'])) {
+            $meanValue = $statistics['meanErosionRate'] ?? null;
+            $stdDevValue = $statistics['std_dev'] ?? null;
+
+            if (is_numeric($meanValue) && (float) $meanValue !== 0.0 && is_numeric($stdDevValue)) {
+                $statistics['erosionCV'] = round(((float) $stdDevValue / (float) $meanValue) * 100, 1);
+            }
+        }
+
+        $rainfallStats = $statistics['rainfallStatistics']
+            ?? $statistics['rainfall_statistics']
+            ?? $metadata['rainfall_statistics']
+            ?? null;
 
         if (!is_array($rainfallStats) || empty($rainfallStats)) {
             return $statistics ?: null;
@@ -377,49 +402,29 @@ class ErosionTileService
 
         $map = $mapQuery->first();
 
-        if (!$map) {
-            Log::warning("No map found for {$areaType} {$areaId}, period {$periodLabel}");
-            
-            // Create new record
-            $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
-            $map = PrecomputedErosionMap::create([
-                'area_type' => $areaType,
-                'area_id' => $areaId,
-                'year' => $startYear,
-                'status' => 'completed',
-                'geotiff_path' => $data['geotiff_path'] ?? null,
-                'tiles_path' => $data['tiles_path'] ?? null,
-                'statistics' => $statistics,
-                'metadata' => array_merge(
-                    [
-                        'task_id' => $taskId,
-                        'period' => [
-                            'start_year' => $startYear,
-                            'end_year' => $endYear,
-                            'label' => $periodLabel,
-                        ],
-                    ],
-                    $data['metadata'] ?? []
-                ),
-                'computed_at' => now()
-            ]);
-            
-            Log::info("New map record created: {$areaType} {$areaId}, period {$periodLabel}");
-        } else {
-            // Update existing record
-            $updatedMetadata = array_merge(
-                $map->metadata ?? [],
-                ['task_id' => $taskId],
-                $data['metadata'] ?? []
-            );
-
-            $updatedMetadata['period'] = [
+        $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
+        $components = $data['components'] ?? $data['metadata']['components'] ?? null;
+        
+        $baseMetadata = [
+            'task_id' => $taskId,
+            'period' => [
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'label' => $periodLabel,
-            ];
+            ],
+        ];
 
-            $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
+        if ($map) {
+            // Update existing record
+            $updatedMetadata = array_merge(
+                $map->metadata ?? [],
+                $baseMetadata,
+                $data['metadata'] ?? []
+            );
+            if ($components !== null) {
+                $updatedMetadata['components'] = $components;
+            }
+
             $map->update([
                 'status' => 'completed',
                 'geotiff_path' => $data['geotiff_path'] ?? null,
@@ -431,9 +436,31 @@ class ErosionTileService
             ]);
             
             Log::info("Map updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
+        } else {
+            // Use updateOrCreate to handle potential race conditions
+            $map = PrecomputedErosionMap::updateOrCreate(
+                [
+                    'area_type' => $areaType,
+                    'area_id' => $areaId,
+                    'year' => $startYear,
+                ],
+                [
+                    'status' => 'completed',
+                    'geotiff_path' => $data['geotiff_path'] ?? null,
+                    'tiles_path' => $data['tiles_path'] ?? null,
+                    'statistics' => $statistics,
+                    'metadata' => array_merge(
+                        $baseMetadata,
+                        $data['metadata'] ?? [],
+                        $components !== null ? ['components' => $components] : []
+                    ),
+                    'computed_at' => now(),
+                    'error_message' => null
+                ]
+            );
+            
+            Log::info("Map record created/updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
         }
-
-        $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
 
         return [
             'status' => 'completed',
@@ -475,46 +502,26 @@ class ErosionTileService
 
         $map = $mapQuery->first();
 
-        if (!$map) {
-            Log::warning("No map found for failed task: {$areaType} {$areaId}, period {$periodLabel}");
-            
-            // Create new record with failed status
-            $map = PrecomputedErosionMap::create([
-                'area_type' => $areaType,
-                'area_id' => $areaId,
-                'year' => $startYear,
-                'status' => 'failed',
-                'error_message' => $error,
-                'metadata' => array_merge(
-                    $data['metadata'] ?? [],
-                    [
-                        'task_id' => $taskId,
-                        'error_type' => $errorType,
-                        'period' => [
-                            'start_year' => $startYear,
-                            'end_year' => $endYear,
-                            'label' => $periodLabel,
-                        ],
-                    ]
-                )
-            ]);
-            
-            Log::info("New failed map record created: {$areaType} {$areaId}, period {$periodLabel}");
-        } else {
+        $baseMetadata = array_merge(
+            $data['metadata'] ?? [],
+            [
+                'task_id' => $taskId,
+                'error_type' => $errorType,
+                'period' => [
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'label' => $periodLabel,
+                ],
+            ]
+        );
+
+        if ($map) {
             // Update existing record to failed
             $updatedMetadata = array_merge(
                 $map->metadata ?? [],
-                $data['metadata'] ?? []
+                $baseMetadata
             );
-
-            $updatedMetadata['task_id'] = $taskId;
-            $updatedMetadata['error_type'] = $errorType;
             $updatedMetadata['failed_at'] = now()->toIso8601String();
-            $updatedMetadata['period'] = [
-                'start_year' => $startYear,
-                'end_year' => $endYear,
-                'label' => $periodLabel,
-            ];
 
             $map->update([
                 'status' => 'failed',
@@ -523,6 +530,25 @@ class ErosionTileService
             ]);
             
             Log::info("Map updated to failed: {$areaType} {$areaId}, period {$periodLabel}");
+        } else {
+            // Use updateOrCreate to handle potential race conditions
+            $metadata = $baseMetadata;
+            $metadata['failed_at'] = now()->toIso8601String();
+            
+            $map = PrecomputedErosionMap::updateOrCreate(
+                [
+                    'area_type' => $areaType,
+                    'area_id' => $areaId,
+                    'year' => $startYear,
+                ],
+                [
+                    'status' => 'failed',
+                    'error_message' => $error,
+                    'metadata' => $metadata
+                ]
+            );
+            
+            Log::info("Map record created/updated to failed: {$areaType} {$areaId}, period {$periodLabel}");
         }
 
         return [

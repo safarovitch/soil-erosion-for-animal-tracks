@@ -28,8 +28,8 @@ window.axios.interceptors.response.use(
             window.axios.defaults.headers.common['Authorization'] = '';
 
             // Redirect to login if not already there
-            if (!window.location.pathname.includes('/login')) {
-                window.location.href = '/login';
+            if (!window.location.pathname.includes('/admin/login')) {
+                window.location.href = '/admin/login';
             }
         }
         return Promise.reject(error);

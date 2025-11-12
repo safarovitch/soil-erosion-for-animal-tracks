@@ -57,6 +57,10 @@ const props = defineProps({
         type: Number,
         default: 0,
     },
+    showLabels: {
+        type: Boolean,
+        default: true,
+    },
 });
 
 // Emits
@@ -113,17 +117,17 @@ const defaultAreaStyle = new Style({
         color: "rgba(255, 255, 255, 0)", // Transparent fill
     }),
     stroke: new Stroke({
-        color: "rgba(0, 0, 0, 0.3)", // Light balck outline
+        color: "rgba(0, 0, 0, 0.2)", // Light balck outline
         width: 1,
     }),
 });
 
 const selectedAreaStyle = new Style({
     fill: new Fill({
-        color: "rgba(0, 0, 0, 0.1)", // Black fill
+        color: "rgba(0, 0, 0, 0.1)", // Fill
     }),
     stroke: new Stroke({
-        color: "rgba(0, 92, 125, .4)", // Black outline
+        color: "rgba(0, 92, 125, .3)", // Outline
         width: 1,
     }),
 });
@@ -177,6 +181,91 @@ const mapConfig = {
     minZoom: 6, // Allow zoom out to 6
 };
 
+const mapTilerKey =
+    (typeof window !== "undefined" && window.MAPTILER_API_KEY) ||
+    (typeof import.meta !== "undefined" &&
+        import.meta.env &&
+        import.meta.env.VITE_MAPTILER_API_KEY) ||
+    null;
+const hasMapTilerTerrain = Boolean(mapTilerKey);
+const mapTilerAttribution = hasMapTilerTerrain
+    ? '© <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'
+    : undefined;
+
+const currentBaseMapType = ref(hasMapTilerTerrain ? "terrain" : "osm");
+const availableBaseMapTypes = computed(() => {
+    const options = [{ id: "osm", label: "OpenStreetMap" }];
+    if (hasMapTilerTerrain) {
+        options.unshift({ id: "terrain", label: "MapTiler Terrain" });
+    }
+    return options;
+});
+
+const createBaseLayerPair = (type) => {
+    if (type === "terrain" && hasMapTilerTerrain) {
+        return {
+            base: new TileLayer({
+                source: new XYZ({
+                    url: `https://api.maptiler.com/maps/terrain/256/{z}/{x}/{y}.png?key=${mapTilerKey}`,
+                    crossOrigin: "anonymous",
+                    maxZoom: 19,
+                    attributions: mapTilerAttribution,
+                }),
+                className: "maptiler-terrain-layer",
+            }),
+            labels: new TileLayer({
+                source: new XYZ({
+                    url: `https://api.maptiler.com/maps/basic-v2/256/{z}/{x}/{y}.png?key=${mapTilerKey}`,
+                    crossOrigin: "anonymous",
+                    maxZoom: 20,
+                    attributions: mapTilerAttribution,
+                }),
+                opacity: 0.35,
+                className: "maptiler-label-layer",
+            }),
+        };
+    }
+
+    return {
+        base: new TileLayer({
+            source: new OSM(),
+            className: "osm-base-layer",
+        }),
+        labels: null,
+    };
+};
+
+const applyBaseMapType = (type) => {
+    const normalizedType =
+        type === "terrain" && hasMapTilerTerrain ? "terrain" : "osm";
+
+    if (!map.value) {
+        currentBaseMapType.value = normalizedType;
+        return;
+    }
+
+    if (baseLayer.value) {
+        map.value.removeLayer(baseLayer.value);
+    }
+    if (labelsLayer.value) {
+        map.value.removeLayer(labelsLayer.value);
+        labelsLayer.value = null;
+    }
+
+    const { base, labels } = createBaseLayerPair(normalizedType);
+
+    baseLayer.value = base;
+    map.value.getLayers().insertAt(0, baseLayer.value);
+
+    if (labels) {
+        labelsLayer.value = labels;
+        map.value.getLayers().insertAt(1, labelsLayer.value);
+        labelsLayer.value.setVisible(props.showLabels !== false);
+    }
+
+    currentBaseMapType.value = normalizedType;
+};
+
 // Initialize map
 const initMap = () => {
     if (!mapContainer.value) return;
@@ -195,17 +284,6 @@ const initMap = () => {
         "x",
         containerRect.height
     );
-
-    // Create base layer (using OpenStreetMap)
-    const baseLayerInstance = new TileLayer({
-        source: new OSM(),
-    });
-
-    // Create labels layer (using OpenStreetMap with labels)
-    const labelsLayerInstance = new TileLayer({
-        source: new OSM(),
-        title: "Tajikistan Labels",
-    });
 
     // Create vector source for user drawings
     vectorSource.value = new VectorSource();
@@ -228,7 +306,7 @@ const initMap = () => {
     // Create the map
     map.value = new Map({
         target: mapContainer.value,
-        layers: [baseLayerInstance, labelsLayerInstance, vectorLayer.value],
+        layers: [],
         view: new View({
             center: mapConfig.center,
             zoom: mapConfig.zoom,
@@ -240,9 +318,8 @@ const initMap = () => {
         ]),
     });
 
-    // Store references for later use
-    baseLayer.value = baseLayerInstance;
-    labelsLayer.value = labelsLayerInstance;
+    applyBaseMapType(currentBaseMapType.value);
+    map.value.addLayer(vectorLayer.value);
 
     // Initialize zoom level
     currentZoom.value = mapConfig.zoom;
@@ -2719,6 +2796,14 @@ const toggleLabels = (visible) => {
     }
 };
 
+watch(
+    () => props.showLabels,
+    (visible) => {
+        toggleLabels(visible);
+    },
+    { immediate: true }
+);
+
 // Get all drawn shapes as GeoJSON
 const getDrawnShapes = () => {
     const geojsonFormat = new GeoJSON();
@@ -3024,6 +3109,10 @@ const clearAreaHighlights = () => {
 };
 
 defineExpose({
+    setBaseMapType: applyBaseMapType,
+    getBaseMapType: () => currentBaseMapType.value,
+    getAvailableBaseMapTypes: () => availableBaseMapTypes.value,
+    hasMapTilerTerrain: () => hasMapTilerTerrain,
     updateErosionData,
     updateDistrictErosionData,
     refreshDistrictsLayer,

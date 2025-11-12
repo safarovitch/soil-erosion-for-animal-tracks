@@ -138,7 +138,6 @@ class GoogleEarthEngineService
         $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
 
         // Check cache first
-        $cacheKey = $this->generateCacheKey($area, $startYear, $endYear, $period);
         $cached = ErosionCache::findByParameters(
             get_class($area),
             $area->id,
@@ -160,123 +159,15 @@ class GoogleEarthEngineService
         }
 
         try {
-            // Use Python GEE service for all computations - never use mock data
-            $pythonServiceUrl = config('services.gee.url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
-            
-            // Convert geometry to GeoJSON
-            $geometry = $this->convertGeometryToGeoJSON($area);
-            
-            Log::info('Computing erosion via Python service', [
-                'area' => $area->name_en,
-                'start_year' => $startYear,
-                'end_year' => $endYear,
-                'period' => $period
-            ]);
-            
-            // Get all factors and soil erosion from Python service
-            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
-                'area_geometry' => $geometry,
-                'year' => $endYear, // Legacy compatibility
-                'start_year' => $startYear,
-                'end_year' => $endYear,
-                'factors' => 'all',
-                'scale' => 100
-            ]);
-            
-            if (!$response->successful()) {
-                $error = $response->json() ?? [];
-                throw GoogleEarthEngineException::apiRequestFailed(
-                    $response->status(),
-                    $error['error'] ?? 'Python GEE service request failed',
-                    $error
-                );
+            if ($area instanceof Region) {
+                $result = $this->computeRegionAggregatedStatistics($area, $startYear, $endYear, $period, $periodLabel);
+            } else {
+                $result = $this->computeSingleAreaStatistics($area, $startYear, $endYear, $period, $periodLabel);
             }
-            
-            $result = $response->json();
-            
-            if (!$result['success']) {
-                throw GoogleEarthEngineException::apiRequestFailed(
-                    500,
-                    $result['error'] ?? 'Failed to compute RUSLE factors',
-                    $result
-                );
-            }
-            
-            $data = $result['data'];
-            $factors = $data['factors'] ?? [];
-            $soilErosion = $data['soil_erosion'] ?? null;
-            
-            // Validate that we have real data - throw error if missing
-            if (empty($factors)) {
-                throw GoogleEarthEngineException::noDataAvailable(
-                    $area->name_en,
-                    $endYear,
-                    ['message' => 'No factor data returned from Python service']
-                );
-            }
-            
-            if (!$soilErosion) {
-                throw GoogleEarthEngineException::noDataAvailable(
-                    $area->name_en,
-                    $endYear,
-                    ['message' => 'No soil erosion data returned from Python service']
-                );
-            }
-            
-            // Build statistics array with real data only
-            $totalArea = $area->area_km2 * 100; // Convert to hectares
-            $meanErosion = $soilErosion['mean'] ?? null;
-            $minErosion = $soilErosion['min'] ?? null;
-            $maxErosion = $soilErosion['max'] ?? null;
-            $stdDev = $soilErosion['std_dev'] ?? null;
-            
-            // Validate required statistics
-            if ($meanErosion === null || $minErosion === null || $maxErosion === null) {
-                throw GoogleEarthEngineException::noDataAvailable(
-                    $area->name_en,
-                    $endYear,
-                    ['message' => 'Incomplete soil erosion statistics from Python service']
-                );
-            }
-            
-            $cv = $stdDev ? ($stdDev / $meanErosion * 100) : 0;
-            
-            $stats = [
-                'tiles' => null,
-                'period' => [
-                    'start_year' => $startYear,
-                    'end_year' => $endYear,
-                    'label' => $periodLabel,
-                ],
-                'statistics' => [
-                    'mean_erosion_rate' => round($meanErosion, 2),
-                    'min_erosion_rate' => round($minErosion, 2),
-                    'max_erosion_rate' => round($maxErosion, 2),
-                    'erosion_cv' => round($cv, 1),
-                    'bare_soil_frequency' => null, // Not provided by Python service
-                    'sustainability_factor' => null, // Not provided by Python service
-                    'rainfall_slope' => null, // Would be calculated from time series
-                    'rainfall_cv' => null, // Would be calculated from time series
-                    'total_area' => $totalArea,
-                    'severity_distribution' => [], // Would need histogram data
-                    'rusle_factors' => [
-                        'r' => $factors['r']['mean'] ?? null,
-                        'k' => $factors['k']['mean'] ?? null,
-                        'ls' => $factors['ls']['mean'] ?? null,
-                        'c' => $factors['c']['mean'] ?? null,
-                        'p' => $factors['p']['mean'] ?? null,
-                    ],
-                    'top_eroding_areas' => [],
-                ],
-                'source' => 'python_gee_service',
-                'timestamp' => now()->toIso8601String(),
-                'factors' => $factors,
-            ];
-            
-            // Cache the result
-            $this->cacheResult($area, $startYear, $endYear, $period, $stats);
 
-            return $stats;
+            $this->cacheResult($area, $startYear, $endYear, $period, $result);
+
+            return $result;
         } catch (GoogleEarthEngineException $e) {
             Log::error('GEE computation error', [
                 'area' => $area->name_en,
@@ -299,6 +190,516 @@ class GoogleEarthEngineService
                 $e
             );
         }
+    }
+
+    /**
+     * Compute erosion statistics for a single geometry without aggregation.
+     */
+    private function computeSingleAreaStatistics(Region|District $area, int $startYear, int $endYear, string $period, string $periodLabel): array
+    {
+        // Use Python GEE service for all computations - never use mock data
+        $pythonServiceUrl = config('services.gee.url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+
+        // Convert geometry to GeoJSON
+        $geometry = $this->convertGeometryToGeoJSON($area);
+
+        Log::info('Computing erosion via Python service', [
+            'area' => $area->name_en,
+            'start_year' => $startYear,
+            'end_year' => $endYear,
+            'period' => $period,
+        ]);
+
+        // Get all factors and soil erosion from Python service
+        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
+            'area_geometry' => $geometry,
+            'year' => $endYear, // Legacy compatibility
+            'start_year' => $startYear,
+            'end_year' => $endYear,
+            'factors' => 'all',
+            'scale' => 100,
+        ]);
+
+        if (!$response->successful()) {
+            $error = $response->json() ?? [];
+            throw GoogleEarthEngineException::apiRequestFailed(
+                $response->status(),
+                $error['error'] ?? 'Python GEE service request failed',
+                $error
+            );
+        }
+
+        $result = $response->json();
+
+        if (!$result['success']) {
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                $result['error'] ?? 'Failed to compute RUSLE factors',
+                $result
+            );
+        }
+
+        $data = $result['data'];
+        $factors = $data['factors'] ?? [];
+        $soilErosion = $data['soil_erosion'] ?? null;
+
+        // Validate that we have real data - throw error if missing
+        if (empty($factors)) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en,
+                $endYear,
+                ['message' => 'No factor data returned from Python service']
+            );
+        }
+
+        if (!$soilErosion) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en,
+                $endYear,
+                ['message' => 'No soil erosion data returned from Python service']
+            );
+        }
+
+        // Build statistics array with real data only
+        $meanErosion = $soilErosion['mean'] ?? null;
+        $minErosion = $soilErosion['min'] ?? null;
+        $maxErosion = $soilErosion['max'] ?? null;
+        $stdDev = $soilErosion['std_dev'] ?? null;
+
+        // Validate required statistics
+        if ($meanErosion === null || $minErosion === null || $maxErosion === null) {
+            throw GoogleEarthEngineException::noDataAvailable(
+                $area->name_en,
+                $endYear,
+                ['message' => 'Incomplete soil erosion statistics from Python service']
+            );
+        }
+
+        $cv = $stdDev ? ($stdDev / $meanErosion * 100) : 0;
+
+        $totalArea = $area->area_km2 ? (float) $area->area_km2 * 100 : 0.0;
+        if (isset($soilErosion['total_area_hectares'])) {
+            $totalArea = (float) $soilErosion['total_area_hectares'];
+        }
+
+        $severityDistribution = [];
+        if (isset($soilErosion['severity_distribution']) && is_array($soilErosion['severity_distribution'])) {
+            foreach ($soilErosion['severity_distribution'] as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+
+                $label = $item['class'] ?? $item['name'] ?? null;
+                if (!$label) {
+                    continue;
+                }
+
+                $severityDistribution[] = [
+                    'class' => $label,
+                    'area' => round((float) ($item['area'] ?? $item['area_hectares'] ?? 0), 2),
+                    'percentage' => round((float) ($item['percentage'] ?? 0), 2),
+                ];
+            }
+        }
+
+        if (empty($severityDistribution)) {
+            $severityDistribution = $this->calculateSeverityDistribution(
+                (float) $meanErosion,
+                $totalArea,
+                [
+                    'properties' => [
+                        'soil_erosion_hazard_stdDev' => $stdDev,
+                    ],
+                ]
+            );
+        }
+
+        return [
+            'tiles' => null,
+            'period' => [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'label' => $periodLabel,
+            ],
+            'statistics' => [
+                'mean_erosion_rate' => round($meanErosion, 2),
+                'min_erosion_rate' => round($minErosion, 2),
+                'max_erosion_rate' => round($maxErosion, 2),
+                'erosion_cv' => round($cv, 1),
+                'bare_soil_frequency' => null, // Not provided by Python service
+                'sustainability_factor' => null, // Not provided by Python service
+                'rainfall_slope' => null, // Would be calculated from time series
+                'rainfall_cv' => null, // Would be calculated from time series
+                'total_area' => $totalArea,
+                'severity_distribution' => $severityDistribution,
+                'rusle_factors' => [
+                    'r' => $factors['r']['mean'] ?? null,
+                    'k' => $factors['k']['mean'] ?? null,
+                    'ls' => $factors['ls']['mean'] ?? null,
+                    'c' => $factors['c']['mean'] ?? null,
+                    'p' => $factors['p']['mean'] ?? null,
+                ],
+                'top_eroding_areas' => [],
+                'std_dev' => $stdDev !== null ? round($stdDev, 2) : null,
+            ],
+            'source' => 'python_gee_service',
+            'timestamp' => now()->toIso8601String(),
+            'factors' => $factors,
+        ];
+    }
+
+    /**
+     * Compute erosion statistics for a region by aggregating its districts.
+     */
+    private function computeRegionAggregatedStatistics(Region $region, int $startYear, int $endYear, string $period, string $periodLabel): array
+    {
+        $districts = District::where('region_id', $region->id)
+            ->orderBy('id')
+            ->get();
+
+        if ($districts->isEmpty()) {
+            return $this->computeSingleAreaStatistics($region, $startYear, $endYear, $period, $periodLabel);
+        }
+
+        $componentResults = [];
+
+        foreach ($districts as $district) {
+            try {
+                $componentResults[] = [
+                    'district' => $district,
+                    'result' => $this->computeErosionForArea($district, $startYear, $endYear, $period),
+                ];
+            } catch (GoogleEarthEngineException $e) {
+                Log::warning('Failed to compute district statistics for aggregation', [
+                    'region' => $region->name_en,
+                    'district' => $district->name_en,
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'error' => $e->getMessage(),
+                ]);
+            } catch (Exception $e) {
+                Log::warning('Unexpected error computing district statistics for aggregation', [
+                    'region' => $region->name_en,
+                    'district' => $district->name_en,
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $validComponents = array_filter(
+            $componentResults,
+            fn ($component) => !empty($component['result']['statistics'])
+        );
+
+        if (empty($validComponents)) {
+            Log::warning('Falling back to direct region computation due to missing district data', [
+                'region' => $region->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period' => $period,
+            ]);
+
+            return $this->computeSingleAreaStatistics($region, $startYear, $endYear, $period, $periodLabel);
+        }
+
+        return $this->buildAggregatedRegionResult($region, $validComponents, $startYear, $endYear, $period, $periodLabel);
+    }
+
+    /**
+     * Build aggregated statistics from district components.
+     *
+     * @param array<int, array{district: \App\Models\District, result: array}> $components
+     */
+    private function buildAggregatedRegionResult(Region $region, array $components, int $startYear, int $endYear, string $period, string $periodLabel): array
+    {
+        $severityClasses = ['Very Low', 'Low', 'Moderate', 'Severe', 'Excessive'];
+
+        $totalArea = 0.0;
+        $weightedMeanSum = 0.0;
+        $varianceSum = 0.0;
+
+        $minErosion = null;
+        $maxErosion = null;
+
+        $bareSoilSum = 0.0;
+        $bareSoilWeight = 0.0;
+
+        $sustainabilitySum = 0.0;
+        $sustainabilityWeight = 0.0;
+
+        $rainfallSlopeSum = 0.0;
+        $rainfallSlopeWeight = 0.0;
+
+        $rainfallCVSum = 0.0;
+        $rainfallCVWeight = 0.0;
+
+        $severityTotals = array_fill_keys($severityClasses, 0.0);
+
+        $factorAggregates = [];
+        foreach (['r', 'k', 'ls', 'c', 'p'] as $factorKey) {
+            $factorAggregates[$factorKey] = [
+                'mean_sum' => 0.0,
+                'weight' => 0.0,
+                'min' => null,
+                'max' => null,
+                'unit' => null,
+                'description' => null,
+            ];
+        }
+
+        $topAreas = [];
+        $componentSummaries = [];
+
+        foreach ($components as $component) {
+            /** @var \App\Models\District $district */
+            $district = $component['district'];
+            $result = $component['result'];
+            $stats = $result['statistics'] ?? [];
+
+            if (empty($stats)) {
+                continue;
+            }
+
+            $componentArea = (float) ($stats['total_area'] ?? 0.0);
+
+            if ($componentArea <= 0 && !empty($stats['severity_distribution'])) {
+                $areaFromClasses = 0.0;
+                foreach ($stats['severity_distribution'] as $item) {
+                    $areaFromClasses += (float) ($item['area'] ?? 0.0);
+                }
+                if ($areaFromClasses > 0) {
+                    $componentArea = $areaFromClasses;
+                }
+            }
+
+            if ($componentArea <= 0) {
+                continue;
+            }
+
+            $totalArea += $componentArea;
+
+            $mean = (float) ($stats['mean_erosion_rate'] ?? 0.0);
+            $weightedMeanSum += $componentArea * $mean;
+
+            $stdDev = isset($stats['std_dev']) ? (float) $stats['std_dev'] : null;
+            if ($stdDev !== null) {
+                $varianceSum += $componentArea * (($stdDev ** 2) + ($mean ** 2));
+            } else {
+                $varianceSum += $componentArea * ($mean ** 2);
+            }
+
+            $compMin = isset($stats['min_erosion_rate']) ? (float) $stats['min_erosion_rate'] : null;
+            $compMax = isset($stats['max_erosion_rate']) ? (float) $stats['max_erosion_rate'] : null;
+
+            if ($compMin !== null) {
+                $minErosion = $minErosion !== null ? min($minErosion, $compMin) : $compMin;
+            }
+
+            if ($compMax !== null) {
+                $maxErosion = $maxErosion !== null ? max($maxErosion, $compMax) : $compMax;
+            }
+
+            if (isset($stats['bare_soil_frequency']) && $stats['bare_soil_frequency'] !== null) {
+                $bareSoilSum += $componentArea * (float) $stats['bare_soil_frequency'];
+                $bareSoilWeight += $componentArea;
+            }
+
+            if (isset($stats['sustainability_factor']) && $stats['sustainability_factor'] !== null) {
+                $sustainabilitySum += $componentArea * (float) $stats['sustainability_factor'];
+                $sustainabilityWeight += $componentArea;
+            }
+
+            if (isset($stats['rainfall_slope']) && $stats['rainfall_slope'] !== null) {
+                $rainfallSlopeSum += $componentArea * (float) $stats['rainfall_slope'];
+                $rainfallSlopeWeight += $componentArea;
+            }
+
+            if (isset($stats['rainfall_cv']) && $stats['rainfall_cv'] !== null) {
+                $rainfallCVSum += $componentArea * (float) $stats['rainfall_cv'];
+                $rainfallCVWeight += $componentArea;
+            }
+
+            foreach ($stats['severity_distribution'] ?? [] as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+
+                $classLabel = $item['class'] ?? $item['name'] ?? null;
+                if (!$classLabel) {
+                    continue;
+                }
+
+                $areaValue = $item['area'] ?? $item['area_hectares'] ?? null;
+                if ($areaValue === null && isset($item['percentage'])) {
+                    $areaValue = ($componentArea * (float) $item['percentage']) / 100.0;
+                }
+
+                if ($areaValue === null) {
+                    continue;
+                }
+
+                if (!array_key_exists($classLabel, $severityTotals)) {
+                    $severityTotals[$classLabel] = 0.0;
+                }
+
+                $severityTotals[$classLabel] += (float) $areaValue;
+            }
+
+            $componentFactors = $result['factors'] ?? [];
+            foreach (['r', 'k', 'ls', 'c', 'p'] as $factorKey) {
+                if (!isset($componentFactors[$factorKey])) {
+                    continue;
+                }
+
+                $factorInfo = $componentFactors[$factorKey];
+                $meanValue = $factorInfo['mean'] ?? (is_array($factorInfo) ? null : $factorInfo);
+
+                if ($meanValue !== null) {
+                    $factorAggregates[$factorKey]['mean_sum'] += $componentArea * (float) $meanValue;
+                    $factorAggregates[$factorKey]['weight'] += $componentArea;
+                }
+
+                if (isset($factorInfo['min'])) {
+                    $currentMin = (float) $factorInfo['min'];
+                    $factorAggregates[$factorKey]['min'] = $factorAggregates[$factorKey]['min'] !== null
+                        ? min($factorAggregates[$factorKey]['min'], $currentMin)
+                        : $currentMin;
+                }
+
+                if (isset($factorInfo['max'])) {
+                    $currentMax = (float) $factorInfo['max'];
+                    $factorAggregates[$factorKey]['max'] = $factorAggregates[$factorKey]['max'] !== null
+                        ? max($factorAggregates[$factorKey]['max'], $currentMax)
+                        : $currentMax;
+                }
+
+                if (isset($factorInfo['unit']) && $factorAggregates[$factorKey]['unit'] === null) {
+                    $factorAggregates[$factorKey]['unit'] = $factorInfo['unit'];
+                }
+
+                if (isset($factorInfo['description']) && $factorAggregates[$factorKey]['description'] === null) {
+                    $factorAggregates[$factorKey]['description'] = $factorInfo['description'];
+                }
+            }
+
+            foreach ($stats['top_eroding_areas'] ?? [] as $topArea) {
+                if (!is_array($topArea)) {
+                    continue;
+                }
+
+                $topAreas[] = [
+                    'name' => $topArea['name'] ?? $topArea['name_en'] ?? $topArea['name_tj'] ?? 'Unknown',
+                    'erosion' => isset($topArea['erosion'])
+                        ? (float) $topArea['erosion']
+                        : (isset($topArea['erosion_rate']) ? (float) $topArea['erosion_rate'] : 0.0),
+                ];
+            }
+
+            $componentSummaries[] = [
+                'area_type' => 'district',
+                'area_id' => $district->id,
+                'region_id' => $district->region_id,
+                'parent_area_id' => $region->id,
+                'parent_area_name' => $region->name_en,
+                'name' => $district->name_en,
+                'statistics' => $stats,
+                'factors' => $result['factors'] ?? [],
+                'source' => $result['source'] ?? null,
+            ];
+        }
+
+        if ($totalArea <= 0) {
+            Log::warning('Aggregated district area is zero; falling back to direct region computation', [
+                'region' => $region->name_en,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+            ]);
+
+            return $this->computeSingleAreaStatistics($region, $startYear, $endYear, $period, $periodLabel);
+        }
+
+        $mean = $totalArea > 0 ? $weightedMeanSum / $totalArea : 0.0;
+        $variance = max(0, ($totalArea > 0 ? ($varianceSum / $totalArea) : 0.0) - ($mean ** 2));
+        $stdDev = $variance > 0 ? sqrt($variance) : 0.0;
+        $cv = $mean != 0.0 ? ($stdDev / $mean) * 100.0 : 0.0;
+
+        $severityDistribution = [];
+        foreach ($severityClasses as $classLabel) {
+            $areaSum = $severityTotals[$classLabel] ?? 0.0;
+            $percentage = $totalArea > 0 ? ($areaSum / $totalArea) * 100.0 : 0.0;
+            $severityDistribution[] = [
+                'class' => $classLabel,
+                'area' => round($areaSum, 2),
+                'percentage' => round($percentage, 2),
+            ];
+        }
+
+        $bareSoil = $bareSoilWeight > 0 ? round($bareSoilSum / $bareSoilWeight, 1) : null;
+        $sustainability = $sustainabilityWeight > 0 ? round($sustainabilitySum / $sustainabilityWeight, 2) : null;
+        $rainfallSlope = $rainfallSlopeWeight > 0 ? round($rainfallSlopeSum / $rainfallSlopeWeight, 2) : null;
+        $rainfallCV = $rainfallCVWeight > 0 ? round($rainfallCVSum / $rainfallCVWeight, 1) : null;
+
+        $factorMeanPrecisions = [
+            'r' => 2,
+            'k' => 3,
+            'ls' => 2,
+            'c' => 3,
+            'p' => 3,
+        ];
+
+        $rusleFactorMeans = [];
+        $aggregatedFactors = [];
+        foreach ($factorAggregates as $key => $aggregate) {
+            $precision = $factorMeanPrecisions[$key] ?? 2;
+            $meanValue = $aggregate['weight'] > 0
+                ? round($aggregate['mean_sum'] / $aggregate['weight'], $precision)
+                : null;
+
+            $rusleFactorMeans[$key] = $meanValue;
+            $aggregatedFactors[$key] = [
+                'mean' => $meanValue,
+                'min' => $aggregate['min'],
+                'max' => $aggregate['max'],
+                'std_dev' => null,
+                'unit' => $aggregate['unit'],
+                'description' => $aggregate['description'],
+            ];
+        }
+
+        usort($topAreas, static function ($a, $b) {
+            return ($b['erosion'] ?? 0.0) <=> ($a['erosion'] ?? 0.0);
+        });
+        $topAreas = array_slice($topAreas, 0, 5);
+
+        return [
+            'tiles' => null,
+            'period' => [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'label' => $periodLabel,
+            ],
+            'statistics' => [
+                'mean_erosion_rate' => round($mean, 2),
+                'min_erosion_rate' => $minErosion !== null ? round($minErosion, 2) : null,
+                'max_erosion_rate' => $maxErosion !== null ? round($maxErosion, 2) : null,
+                'erosion_cv' => round($cv, 1),
+                'bare_soil_frequency' => $bareSoil,
+                'sustainability_factor' => $sustainability,
+                'rainfall_slope' => $rainfallSlope,
+                'rainfall_cv' => $rainfallCV,
+                'total_area' => round($totalArea, 2),
+                'severity_distribution' => $severityDistribution,
+                'rusle_factors' => $rusleFactorMeans,
+                'top_eroding_areas' => $topAreas,
+                'std_dev' => round($stdDev, 2),
+            ],
+            'source' => 'aggregated_districts',
+            'timestamp' => now()->toIso8601String(),
+            'factors' => $aggregatedFactors,
+            'components' => $componentSummaries,
+        ];
     }
 
     /**

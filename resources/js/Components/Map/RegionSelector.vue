@@ -70,10 +70,6 @@
                                         </div>
                                     </div>
                                 </div>
-
-                                <span v-if="isDistrictSelected(district.id)" class="text-xs text-blue-600 font-medium">
-                                    Selected
-                                </span>
                             </label>
                         </div>
                     </transition>

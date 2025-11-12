@@ -15,8 +15,18 @@ class RoleMiddleware
      */
     public function handle(Request $request, Closure $next, string $role): Response
     {
-        if (!$request->user() || !$request->user()->hasRole($role)) {
-            return response()->json(['error' => 'Unauthorized'], 403);
+        $user = $request->user();
+
+        if (!$user) {
+            return $request->expectsJson()
+                ? response()->json(['error' => 'Unauthenticated'], 401)
+                : redirect()->route('admin.login');
+        }
+
+        if (!$user->hasRole($role)) {
+            return $request->expectsJson()
+                ? response()->json(['error' => 'Unauthorized'], 403)
+                : abort(403, 'This action is unauthorized.');
         }
 
         return $next($request);

@@ -145,6 +145,27 @@
             <div class="flex-1 flex flex-col overflow-hidden relative">
                 <!-- Export Toolbar -->
                 <div class="absolute top-4 right-4 z-30 flex space-x-2">
+                    <div
+                        class="px-3 py-2 bg-white rounded-lg shadow-lg flex items-center space-x-2"
+                        title="Change base map style"
+                    >
+                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                            Map
+                        </span>
+                        <select
+                            v-model="selectedBaseMapType"
+                            :disabled="!mapInstance || baseMapOptions.length <= 1"
+                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <option
+                                v-for="option in baseMapOptions"
+                                :key="option.id"
+                                :value="option.id"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </div>
                     <button
                         @click="exportMapAsPNG"
                         class="px-3 py-2 bg-white rounded-lg shadow-lg hover:bg-gray-50 flex items-center space-x-2"
@@ -479,6 +500,8 @@ const visibleLayers = ref([]); // Start with no layers selected (country-wide de
 const showLabels = ref(true); // Show map labels by default
 const mapInstance = ref(null);
 const mapView = ref(null);
+const baseMapOptions = ref([{ id: "osm", label: "OpenStreetMap" }]);
+const selectedBaseMapType = ref("osm");
 const statistics = ref(null);
 const areaStatistics = ref([]);
 const timeSeriesData = ref([]);
@@ -624,6 +647,10 @@ const applySelection = async () => {
     statistics.value = null;
     timeSeriesData.value = [];
 
+    if (mapView.value?.clearAreaHighlights) {
+        mapView.value.clearAreaHighlights();
+    }
+
     if (areasToApply.length > 0) {
         if (!bottomPanelVisible.value) {
             bottomPanelVisible.value = true;
@@ -687,7 +714,12 @@ const applySelection = async () => {
                 );
 
                 if (result) {
-                    results.push(result);
+                    const { components = [], ...primaryResult } = result;
+                    results.push(primaryResult);
+
+                    if (Array.isArray(components) && components.length) {
+                        results.push(...components);
+                    }
                 }
 
                 progress.value = Math.round(
@@ -696,8 +728,10 @@ const applySelection = async () => {
             }
 
             areaStatistics.value = results;
-            statistics.value =
-                results.length === 1 ? results[0]?.statistics || null : null;
+            const primaryEntry = results.find(
+                (entry) => entry && entry.isComponent !== true
+            );
+            statistics.value = primaryEntry?.statistics || null;
         } finally {
             setTimeout(() => {
                 loading.value = false;
@@ -748,6 +782,24 @@ const clearSelection = () => {
 const handleMapReady = (map) => {
     mapInstance.value = map;
     console.log("Map is ready");
+
+    if (mapView.value?.getAvailableBaseMapTypes) {
+        const options = mapView.value.getAvailableBaseMapTypes();
+        if (Array.isArray(options) && options.length > 0) {
+            baseMapOptions.value = options;
+        }
+    }
+
+    if (mapView.value?.getBaseMapType) {
+        const currentType = mapView.value.getBaseMapType();
+        if (currentType) {
+            selectedBaseMapType.value = currentType;
+        }
+    }
+
+    if (mapView.value?.toggleLabels) {
+        mapView.value.toggleLabels(showLabels.value);
+    }
 };
 
 const handleGeoJSONLoaded = async (geoJsonPath) => {
@@ -830,6 +882,32 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
         return null;
     }
 
+    const createStatisticsPayload = (rawStats, slopeValue, cvValue) => {
+        const severityDistribution = Array.isArray(rawStats.severity_distribution)
+            ? rawStats.severity_distribution
+            : [];
+        const rusleFactors = rawStats.rusle_factors || {};
+        const topErodingAreas = Array.isArray(rawStats.top_eroding_areas)
+            ? rawStats.top_eroding_areas
+            : [];
+        const mean = Number(rawStats.mean_erosion_rate ?? 0);
+
+        return {
+            meanErosionRate: mean,
+            minErosionRate: Number(rawStats.min_erosion_rate ?? 0),
+            maxErosionRate: Number(rawStats.max_erosion_rate ?? 0),
+            erosionCV: Number(rawStats.erosion_cv ?? 0),
+            bareSoilFrequency: Number(rawStats.bare_soil_frequency ?? 0),
+            sustainabilityFactor: Number(rawStats.sustainability_factor ?? 0),
+            rainfallSlope: slopeValue,
+            rainfallCV: cvValue,
+            riskLevel: getRiskLevel(mean),
+            severityDistribution,
+            rusleFactors,
+            topErodingAreas,
+        };
+    };
+
     try {
         const startYear = currentStartYear.value;
         const endYear = currentEndYear.value;
@@ -849,6 +927,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
         loadingMessage.value = `Calculating RUSLE statistics (${index + 1}/${total})...`;
 
         let cachedStatistics = null;
+        let cachedComponents = [];
 
         let cachedPeriodLabel = null;
 
@@ -877,6 +956,9 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                             ? `${startYear}`
                             : `${startYear}-${endYear}`);
                     loadingMessage.value = `Loading cached RUSLE statistics (${index + 1}/${total})...`;
+                    if (Array.isArray(availability.components)) {
+                        cachedComponents = availability.components;
+                    }
                 }
             } catch (error) {
                 console.warn(
@@ -887,6 +969,130 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
         }
 
         if (cachedStatistics) {
+            const rainfallSlope = Number(cachedStatistics.rainfallSlope ?? cachedStatistics.rainfall_slope ?? 0);
+            const rainfallCV = Number(cachedStatistics.rainfallCV ?? cachedStatistics.rainfall_cv ?? 0);
+
+            const statisticsPayload = createStatisticsPayload(
+                {
+                    mean_erosion_rate:
+                        cachedStatistics.meanErosionRate ??
+                        cachedStatistics.mean_erosion_rate ??
+                        cachedStatistics.mean ??
+                        0,
+                    min_erosion_rate:
+                        cachedStatistics.minErosionRate ??
+                        cachedStatistics.min_erosion_rate ??
+                        cachedStatistics.min ??
+                        0,
+                    max_erosion_rate:
+                        cachedStatistics.maxErosionRate ??
+                        cachedStatistics.max_erosion_rate ??
+                        cachedStatistics.max ??
+                        0,
+                    erosion_cv:
+                        cachedStatistics.erosionCV ??
+                        cachedStatistics.erosion_cv ??
+                        cachedStatistics.cv ??
+                        0,
+                    bare_soil_frequency:
+                        cachedStatistics.bareSoilFrequency ??
+                        cachedStatistics.bare_soil_frequency ??
+                        null,
+                    sustainability_factor:
+                        cachedStatistics.sustainabilityFactor ??
+                        cachedStatistics.sustainability_factor ??
+                        null,
+                    rainfall_slope:
+                        cachedStatistics.rainfall_slope ??
+                        cachedStatistics.rainfallSlope ??
+                        rainfallSlope,
+                    rainfall_cv:
+                        cachedStatistics.rainfall_cv ??
+                        cachedStatistics.rainfallCV ??
+                        rainfallCV,
+                    severity_distribution:
+                        cachedStatistics.severityDistribution ??
+                        cachedStatistics.severity_distribution ??
+                        [],
+                    rusle_factors:
+                        cachedStatistics.rusleFactors ??
+                        cachedStatistics.rusle_factors ??
+                        {},
+                    top_eroding_areas:
+                        cachedStatistics.topErodingAreas ??
+                        cachedStatistics.top_eroding_areas ??
+                        [],
+                },
+                rainfallSlope,
+                rainfallCV
+            );
+
+            const componentEntries = (cachedComponents || [])
+                .map((component) => {
+                    if (
+                        !component ||
+                        !component.statistics ||
+                        typeof component.area_id === "undefined"
+                    ) {
+                        return null;
+                    }
+
+                    const componentSlope = Number(
+                        component.statistics.rainfall_slope ??
+                            component.rainfall_slope ??
+                            0
+                    );
+                    const componentCv = Number(
+                        component.statistics.rainfall_cv ??
+                            component.rainfall_cv ??
+                            0
+                    );
+                    const componentAreaType =
+                        component.area_type ||
+                        (component.region_id ? "district" : areaType);
+
+                    const componentArea = {
+                        id: component.area_id,
+                        area_type: componentAreaType,
+                        region_id: component.region_id ?? area.id,
+                        name_en: component.name || component.name_en || area.name_en,
+                        name_tj: component.name_tj || null,
+                    };
+
+                    return {
+                        key: `${buildDetailedLayerKey(
+                            componentAreaType,
+                            component.area_id,
+                            startYear,
+                            endYear
+                        )}::component`,
+                        area: componentArea,
+                        areaType: componentAreaType,
+                        periodLabel:
+                            cachedPeriodLabel ||
+                            (startYear === endYear
+                                ? `${startYear}`
+                                : `${startYear}-${endYear}`),
+                        statistics: createStatisticsPayload(
+                            component.statistics,
+                            componentSlope,
+                            componentCv
+                        ),
+                        isComponent: true,
+                        parentAreaId:
+                            component.parent_area_id ??
+                            area.id ??
+                            component.region_id ??
+                            null,
+                        parentAreaName:
+                            component.parent_area_name ??
+                            area.name_en ??
+                            area.name ??
+                            null,
+                    };
+                })
+                .filter(Boolean);
+
             return {
                 key: buildDetailedLayerKey(areaType, areaId, startYear, endYear),
                 area,
@@ -896,7 +1102,8 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                     (startYear === endYear
                         ? `${startYear}`
                         : `${startYear}-${endYear}`),
-                statistics: cachedStatistics,
+                statistics: statisticsPayload,
+                components: componentEntries,
             };
         }
 
@@ -970,28 +1177,67 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             }
         }
 
-        const severityDistribution = Array.isArray(stats.severity_distribution)
-            ? stats.severity_distribution
-            : [];
-        const rusleFactors = stats.rusle_factors || {};
-        const topErodingAreas = Array.isArray(stats.top_eroding_areas)
-            ? stats.top_eroding_areas
+        const statisticsPayload = createStatisticsPayload(
+            stats,
+            rainfallSlope,
+            rainfallCV
+        );
+
+        const componentSummaries = Array.isArray(data.data.components)
+            ? data.data.components
             : [];
 
-        const statisticsPayload = {
-            meanErosionRate,
-            minErosionRate: Number(stats.min_erosion_rate ?? 0),
-            maxErosionRate: Number(stats.max_erosion_rate ?? 0),
-            erosionCV: Number(stats.erosion_cv ?? 0),
-            bareSoilFrequency: Number(stats.bare_soil_frequency ?? 0),
-            sustainabilityFactor: Number(stats.sustainability_factor ?? 0),
-            rainfallSlope,
-            rainfallCV,
-            riskLevel: getRiskLevel(meanErosionRate),
-            severityDistribution,
-            rusleFactors,
-            topErodingAreas,
-        };
+        const componentEntries = componentSummaries
+            .map((component) => {
+                if (
+                    !component ||
+                    !component.statistics ||
+                    typeof component.area_id === "undefined"
+                ) {
+                    return null;
+                }
+
+                const componentAreaType =
+                    component.area_type || (component.region_id ? "district" : areaType);
+                const componentAreaId = component.area_id;
+                const componentSlope = Number(
+                    component.statistics.rainfall_slope ?? component.rainfall_slope ?? 0
+                );
+                const componentCv = Number(
+                    component.statistics.rainfall_cv ?? component.rainfall_cv ?? 0
+                );
+
+                const componentArea = {
+                    id: componentAreaId,
+                    area_type: componentAreaType,
+                    region_id: component.region_id ?? area.id,
+                    name_en: component.name || component.name_en || area.name_en,
+                    name_tj: component.name_tj || null,
+                };
+
+                return {
+                    key: `${buildDetailedLayerKey(
+                        componentAreaType,
+                        componentAreaId,
+                        startYear,
+                        endYear
+                    )}::component`,
+                    area: componentArea,
+                    areaType: componentAreaType,
+                    periodLabel: currentPeriodLabel.value,
+                    statistics: createStatisticsPayload(
+                        component.statistics,
+                        componentSlope,
+                        componentCv
+                    ),
+                    isComponent: true,
+                    parentAreaId:
+                        component.parent_area_id ?? area.id ?? component.region_id ?? null,
+                    parentAreaName:
+                        component.parent_area_name ?? area.name_en ?? area.name ?? null,
+                };
+            })
+            .filter(Boolean);
 
         return {
             key: buildDetailedLayerKey(areaType, areaId, startYear, endYear),
@@ -999,6 +1245,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             areaType,
             periodLabel: currentPeriodLabel.value,
             statistics: statisticsPayload,
+            components: componentEntries,
         };
     } catch (error) {
         console.error("Failed to load area statistics:", error);
@@ -1980,6 +2227,28 @@ watch(bottomPanelVisible, () => {
         setTimeout(() => mapInstance.value.updateSize(), 200);
     }
 });
+
+watch(
+    selectedBaseMapType,
+    (type) => {
+        if (!type || !mapInstance.value || !mapView.value?.setBaseMapType) {
+            return;
+        }
+
+        const currentType = mapView.value?.getBaseMapType
+            ? mapView.value.getBaseMapType()
+            : null;
+
+        if (currentType !== type) {
+            mapView.value.setBaseMapType(type);
+        }
+
+        if (mapView.value?.toggleLabels) {
+            mapView.value.toggleLabels(showLabels.value);
+        }
+    },
+    { flush: "post" }
+);
 
 // Load erosion data for all districts (whole country)
 const loadCountryWideData = async () => {

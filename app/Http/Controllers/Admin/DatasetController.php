@@ -16,10 +16,7 @@ class DatasetController extends Controller
 {
     public function __construct(
         private GeoTiffProcessor $processor
-    ) {
-        $this->middleware('auth:sanctum');
-        $this->middleware('role:admin');
-    }
+    ) {}
 
     /**
      * Upload a new GeoTIFF dataset.

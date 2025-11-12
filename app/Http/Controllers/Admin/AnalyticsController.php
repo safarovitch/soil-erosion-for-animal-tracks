@@ -13,12 +13,6 @@ use Illuminate\Support\Facades\DB;
 
 class AnalyticsController extends Controller
 {
-    public function __construct()
-    {
-        $this->middleware('auth:sanctum');
-        $this->middleware('role:admin');
-    }
-
     /**
      * Get dashboard statistics.
      */

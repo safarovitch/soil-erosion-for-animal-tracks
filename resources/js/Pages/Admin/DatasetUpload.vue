@@ -207,12 +207,7 @@
 <script setup>
 import { Head, Link, router } from '@inertiajs/vue3'
 import { ref, onMounted } from 'vue'
-import { useAuthStore } from '@/Stores/useAuthStore'
-import { useDatasetStore } from '@/Stores/useDatasetStore'
 import axios from 'axios'
-
-const authStore = useAuthStore()
-const datasetStore = useDatasetStore()
 
 const form = ref({
   name: '',
@@ -226,6 +221,7 @@ const uploadProgress = ref(0)
 const error = ref('')
 const success = ref('')
 const datasets = ref([])
+const pagination = ref(null)
 
 const handleFileSelect = (event) => {
   const file = event.target.files[0]
@@ -285,7 +281,27 @@ const uploadDataset = async () => {
 const loadDatasets = async () => {
   try {
     const response = await axios.get('/api/admin/datasets')
-    datasets.value = response.data.data || []
+    const payload = response.data?.data
+
+    if (Array.isArray(payload)) {
+      datasets.value = payload
+      pagination.value = null
+      return
+    }
+
+    if (payload && Array.isArray(payload.data)) {
+      datasets.value = payload.data
+      pagination.value = {
+        currentPage: payload.current_page,
+        lastPage: payload.last_page,
+        perPage: payload.per_page,
+        total: payload.total,
+      }
+      return
+    }
+
+    datasets.value = []
+    pagination.value = null
   } catch (error) {
     console.error('Error loading datasets:', error)
   }
@@ -326,10 +342,13 @@ const formatFileSize = (bytes) => {
 
 const logout = async () => {
   try {
-    await authStore.logout()
-    router.visit('/')
+    await axios.post('/admin/logout')
   } catch (error) {
     console.error('Logout error:', error)
+  } finally {
+    localStorage.removeItem('sanctum_token')
+    delete axios.defaults.headers.common.Authorization
+    router.visit('/admin/login')
   }
 }
 
