@@ -24,68 +24,7 @@
     </nav>
 
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-      <!-- Filters -->
-      <div class="bg-white shadow rounded-lg mb-6">
-        <div class="px-4 py-5 sm:p-6">
-          <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Filters</h3>
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <label for="dateRange" class="block text-sm font-medium text-gray-700">Date Range</label>
-              <select
-                id="dateRange"
-                v-model="filters.dateRange"
-                @change="applyFilters"
-                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              >
-                <option value="">All time</option>
-                <option value="today">Today</option>
-                <option value="week">Last week</option>
-                <option value="month">Last month</option>
-                <option value="year">Last year</option>
-              </select>
-            </div>
-
-            <div>
-              <label for="queryType" class="block text-sm font-medium text-gray-700">Query Type</label>
-              <select
-                id="queryType"
-                v-model="filters.queryType"
-                @change="applyFilters"
-                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              >
-                <option value="">All types</option>
-                <option value="erosion_compute">Erosion Compute</option>
-                <option value="time_series">Time Series</option>
-                <option value="geometry_analysis">Geometry Analysis</option>
-              </select>
-            </div>
-
-            <div>
-              <label for="userType" class="block text-sm font-medium text-gray-700">User Type</label>
-              <select
-                id="userType"
-                v-model="filters.userType"
-                @change="applyFilters"
-                class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              >
-                <option value="">All users</option>
-                <option value="authenticated">Authenticated</option>
-                <option value="anonymous">Anonymous</option>
-              </select>
-            </div>
-
-            <div class="flex items-end">
-              <button
-                @click="exportData"
-                class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-              >
-                Export CSV
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
+      
       <!-- Usage Statistics -->
       <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div class="bg-white overflow-hidden shadow rounded-lg">

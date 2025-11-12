@@ -48,6 +48,10 @@ const props = defineProps({
     selectedRegion: Object,
     selectedDistrict: Object,
     selectedAreas: Array,
+    customLayers: {
+        type: Array,
+        default: () => [],
+    },
     selectedPeriod: {
         type: Object,
         default: null,
@@ -1235,6 +1239,26 @@ const clipGeometryToCountryBounds = async (geometry) => {
 // Layer management
 const mapLayers = ref({});
 
+const createCustomTileLayer = (layerDef) => {
+    if (!layerDef || !layerDef.tileUrlTemplate) {
+        return null;
+    }
+
+    const source = new XYZ({
+        url: layerDef.tileUrlTemplate,
+        crossOrigin: "anonymous",
+        transition: 0,
+    });
+
+    return new TileLayer({
+        source,
+        opacity: layerDef.defaultOpacity ?? 1,
+        className:
+            layerDef.className ||
+            `custom-dataset-layer-${layerDef.id || "user-custom"}`,
+    });
+};
+
 const updateMapLayers = async () => {
     if (!map.value) return;
 
@@ -1320,6 +1344,24 @@ const updateMapLayers = async () => {
         },
     };
 
+    (props.customLayers || []).forEach((layer) => {
+        if (!layer || !layer.id || !layer.tileUrlTemplate) {
+            return;
+        }
+
+        layerDefinitions[layer.id] = {
+            id: layer.id,
+            name: layer.name || "Custom Dataset",
+            type: "custom-tile",
+            tileUrlTemplate: layer.tileUrlTemplate,
+            defaultOpacity: layer.defaultOpacity ?? 1.0,
+            metadata:
+                layer.metadata && typeof layer.metadata === "object"
+                    ? layer.metadata
+                    : {},
+        };
+    });
+
     // Clear all existing layers first (single layer display)
     Object.keys(mapLayers.value).forEach((layerId) => {
         map.value.removeLayer(mapLayers.value[layerId]);
@@ -1371,6 +1413,24 @@ const updateMapLayers = async () => {
                         selectedPeriodLength.value || 0
                     } year(s).`,
                 });
+                return;
+            }
+
+            if (layerDef.type === "custom-tile") {
+                const customLayer = createCustomTileLayer({
+                    ...layerDef,
+                    id: layerId,
+                });
+
+                if (!customLayer) {
+                    console.warn(
+                        `Failed to create custom dataset layer for ${layerId}`
+                    );
+                    return;
+                }
+
+                map.value.addLayer(customLayer);
+                mapLayers.value[layerId] = customLayer;
                 return;
             }
 
@@ -2285,6 +2345,17 @@ watch(
             updateMapLayers();
         }
     }
+);
+
+watch(
+    () => props.customLayers,
+    () => {
+        if (!map.value) {
+            return;
+        }
+        updateMapLayers();
+    },
+    { deep: true }
 );
 
 // Load TopoJSON data

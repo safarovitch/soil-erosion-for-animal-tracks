@@ -114,9 +114,9 @@ Route::prefix('erosion')->group(function () {
     );
 });
 
-// Custom datasets (public access)
-Route::get('/datasets', [DatasetController::class, 'getAvailable']);
-Route::get('/datasets/{dataset}/tiles/{z}/{x}/{y}', [DatasetController::class, 'serveTiles'])
+// Custom datasets (owner access only)
+Route::middleware(['auth:sanctum', 'role:admin'])->get('/datasets', [DatasetController::class, 'getAvailable']);
+Route::get('/datasets/{dataset}/tiles/{z}/{x}/{y}.png', [DatasetController::class, 'serveTiles'])
     ->name('api.datasets.tiles');
 
 /*

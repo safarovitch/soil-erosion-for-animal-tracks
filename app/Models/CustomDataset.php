@@ -17,7 +17,14 @@ class CustomDataset extends Model
         'processed_path',
         'metadata',
         'status',
+        'access_token',
         'processed_at',
+    ];
+
+    protected $hidden = [
+        'file_path',
+        'processed_path',
+        'access_token',
     ];
 
     protected $casts = [

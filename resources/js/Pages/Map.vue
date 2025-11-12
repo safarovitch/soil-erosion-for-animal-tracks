@@ -209,6 +209,7 @@
                         :selected-period="selectedPeriod"
                         :visible-layers="visibleLayers"
                         :analysis-trigger="analysisTrigger"
+                        :custom-layers="customLayerDefinitions"
                         @map-ready="handleMapReady"
                         @statistics-updated="handleStatisticsUpdated"
                         @district-clicked="handleDistrictClicked"
@@ -466,6 +467,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
+import axios from "axios";
 import { router } from "@inertiajs/vue3";
 import MapView from "@/Components/Map/MapView.vue";
 import RegionSelector from "@/Components/Map/RegionSelector.vue";
@@ -549,8 +551,9 @@ const loginForm = reactive({
 const buildDetailedLayerKey = (areaType, areaId, startYear, endYear) =>
     `${areaType}-${areaId}-${startYear}-${endYear}`;
 
-// Available layers
-const availableLayers = ref([
+const CUSTOM_LAYER_PREFIX = "custom_dataset_";
+
+const baseAvailableLayers = Object.freeze([
     {
         id: "erosion",
         name: "Soil Erosion Hazard",
@@ -594,6 +597,81 @@ const availableLayers = ref([
         metadata: { unit: "dimensionless", range: "0-1" },
     },
 ]);
+
+const customDatasets = ref([]);
+
+const customLayerDefinitions = computed(() =>
+    customDatasets.value
+        .filter((dataset) => dataset && dataset.tile_url_template)
+        .map((dataset) => {
+            const metadata =
+                dataset.metadata && typeof dataset.metadata === "object"
+                    ? dataset.metadata
+                    : {};
+
+            return {
+                id: `${CUSTOM_LAYER_PREFIX}${dataset.id}`,
+                datasetId: dataset.id,
+                name: dataset.name || `Custom Dataset ${dataset.id}`,
+                description: dataset.description || "User uploaded raster dataset",
+                metadata,
+                tileUrlTemplate: dataset.tile_url_template,
+            };
+        })
+);
+
+const availableLayers = computed(() => [
+    ...baseAvailableLayers,
+    ...customLayerDefinitions.value.map(
+        ({ id, name, description, metadata }) => ({
+            id,
+            name,
+            description,
+            metadata,
+        })
+    ),
+]);
+
+watch(
+    availableLayers,
+    () => {
+        if (!Array.isArray(availableLayers.value)) {
+            return;
+        }
+
+        visibleLayers.value = visibleLayers.value.filter((layerId) =>
+            availableLayers.value.some((layer) => layer.id === layerId)
+        );
+    },
+    { deep: true }
+);
+
+const loadCustomDatasets = async () => {
+    if (!props.user || props.user.role !== "admin") {
+        customDatasets.value = [];
+        return;
+    }
+
+    try {
+        const response = await axios.get("/api/datasets");
+        const payload = response.data?.data;
+        customDatasets.value = Array.isArray(payload) ? payload : [];
+    } catch (error) {
+        if (error.response?.status === 401 || error.response?.status === 403) {
+            customDatasets.value = [];
+        } else {
+            console.error("Failed to load custom datasets:", error);
+        }
+    }
+};
+
+watch(
+    () => (props.user ? props.user.role : null),
+    () => {
+        loadCustomDatasets();
+    },
+    { immediate: true }
+);
 
 // Computed properties
 const isAuthenticated = computed(

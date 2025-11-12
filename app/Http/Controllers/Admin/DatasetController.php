@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -67,14 +68,17 @@ class DatasetController extends Controller
                 'file_path' => $filePath,
                 'metadata' => $validation,
                 'status' => 'uploading',
+                'access_token' => Str::uuid()->toString(),
             ]);
 
             // Process the file asynchronously (you might want to use a job queue)
             $this->processDataset($dataset);
 
+            $dataset->refresh();
+
             return response()->json([
                 'success' => true,
-                'dataset' => $dataset,
+                'dataset' => $this->datasetResponse($dataset),
                 'message' => 'File uploaded successfully. Processing will begin shortly.',
             ]);
         } catch (\Exception $e) {
@@ -95,7 +99,17 @@ class DatasetController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        $userId = Auth::id();
+
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Unauthorized',
+            ], 401);
+        }
+
         $query = CustomDataset::with('user')
+            ->where('user_id', $userId)
             ->orderBy('created_at', 'desc');
 
         if ($request->has('type')) {
@@ -107,6 +121,9 @@ class DatasetController extends Controller
         }
 
         $datasets = $query->paginate(20);
+        $datasets->getCollection()->transform(function (CustomDataset $dataset) {
+            return $this->datasetResponse($dataset);
+        });
 
         return response()->json([
             'success' => true,
@@ -119,11 +136,12 @@ class DatasetController extends Controller
      */
     public function show(CustomDataset $dataset): JsonResponse
     {
+        $this->ensureOwner($dataset);
         $dataset->load('user');
 
         return response()->json([
             'success' => true,
-            'data' => $dataset,
+            'data' => $this->datasetResponse($dataset),
         ]);
     }
 
@@ -132,6 +150,8 @@ class DatasetController extends Controller
      */
     public function update(Request $request, CustomDataset $dataset): JsonResponse
     {
+        $this->ensureOwner($dataset);
+
         $request->validate([
             'name' => 'sometimes|required|string|max:255',
             'description' => 'nullable|string|max:1000',
@@ -139,10 +159,11 @@ class DatasetController extends Controller
         ]);
 
         $dataset->update($request->only(['name', 'description', 'type']));
+        $dataset->refresh();
 
         return response()->json([
             'success' => true,
-            'data' => $dataset,
+            'data' => $this->datasetResponse($dataset),
             'message' => 'Dataset updated successfully.',
         ]);
     }
@@ -152,6 +173,8 @@ class DatasetController extends Controller
      */
     public function destroy(CustomDataset $dataset): JsonResponse
     {
+        $this->ensureOwner($dataset);
+
         try {
             // Delete files
             if (Storage::disk('geotiff')->exists($dataset->file_path)) {
@@ -186,9 +209,20 @@ class DatasetController extends Controller
      */
     public function getAvailable(): JsonResponse
     {
+        $userId = Auth::id();
+
+        if (!$userId) {
+            return response()->json([
+                'success' => true,
+                'data' => [],
+            ]);
+        }
+
         $datasets = CustomDataset::ready()
-            ->select('id', 'name', 'description', 'type', 'metadata')
-            ->get();
+            ->where('user_id', $userId)
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(fn (CustomDataset $dataset) => $this->datasetResponse($dataset));
 
         return response()->json([
             'success' => true,
@@ -199,13 +233,24 @@ class DatasetController extends Controller
     /**
      * Serve tiles for a dataset.
      */
-    public function serveTiles(CustomDataset $dataset, int $z, int $x, int $y): \Symfony\Component\HttpFoundation\Response
+    public function serveTiles(Request $request, CustomDataset $dataset, int $z, int $x, int $y): \Symfony\Component\HttpFoundation\Response
     {
+        if (!$this->canAccessDataset($dataset, $request)) {
+            abort(403, 'Unauthorized');
+        }
+
         if (!$dataset->isReady()) {
             abort(404);
         }
 
-        $tilePath = $dataset->processed_path . "/tiles/{$z}/{$x}/{$y}.png";
+        $tilesPath = $dataset->processed_path;
+
+        if (!$tilesPath) {
+            abort(404);
+        }
+
+        $tilesPath = rtrim($tilesPath, '/');
+        $tilePath = "{$tilesPath}/{$z}/{$x}/{$y}.png";
 
         if (!Storage::disk('geotiff')->exists($tilePath)) {
             abort(404);
@@ -234,9 +279,16 @@ class DatasetController extends Controller
 
             if ($result['success']) {
                 $dataset->update([
-                    'processed_path' => $result['cog_path'],
+                    'processed_path' => $result['tiles_path'],
                     'status' => 'ready',
                     'processed_at' => now(),
+                    'metadata' => array_merge(
+                        is_array($dataset->metadata) ? $dataset->metadata : [],
+                        [
+                            'cog_path' => $result['cog_path'],
+                            'tiles_path' => $result['tiles_path'],
+                        ]
+                    ),
                 ]);
             } else {
                 $dataset->update([
@@ -251,5 +303,62 @@ class DatasetController extends Controller
 
             $dataset->update(['status' => 'failed']);
         }
+    }
+
+    /**
+     * Ensure the current user owns the dataset.
+     */
+    private function ensureOwner(CustomDataset $dataset): void
+    {
+        if (Auth::id() !== $dataset->user_id) {
+            abort(403, 'Unauthorized');
+        }
+    }
+
+    /**
+     * Determine whether the current request can access the dataset.
+     */
+    private function canAccessDataset(CustomDataset $dataset, Request $request): bool
+    {
+        $userId = Auth::id();
+
+        if ($userId && $dataset->user_id === $userId) {
+            return true;
+        }
+
+        $token = (string) $request->query('access_token', '');
+
+        if ($token !== '' && hash_equals($dataset->access_token, $token)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Build a consistent dataset response payload.
+     */
+    private function datasetResponse(CustomDataset $dataset): array
+    {
+        return [
+            'id' => $dataset->id,
+            'name' => $dataset->name,
+            'description' => $dataset->description,
+            'type' => $dataset->type,
+            'status' => $dataset->status,
+            'metadata' => $dataset->metadata,
+            'processed_at' => $dataset->processed_at?->toISOString(),
+            'tile_url_template' => $this->buildTileUrlTemplate($dataset),
+        ];
+    }
+
+    /**
+     * Generate the absolute tile URL template for XYZ sources.
+     */
+    private function buildTileUrlTemplate(CustomDataset $dataset): string
+    {
+        $path = "/api/datasets/{$dataset->id}/tiles/{z}/{x}/{y}.png";
+
+        return URL::to($path) . '?access_token=' . $dataset->access_token;
     }
 }
