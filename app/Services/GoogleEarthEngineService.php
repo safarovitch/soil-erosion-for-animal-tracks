@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ErosionCache;
 use App\Models\Region;
 use App\Models\District;
+use App\Models\PrecomputedErosionMap;
 use App\Exceptions\GoogleEarthEngineException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -148,6 +149,14 @@ class GoogleEarthEngineService
 
         if ($cached && !$cached->isExpired()) {
             return $cached->data;
+        }
+
+        if ($period === 'annual') {
+            $precomputed = $this->getPrecomputedStatistics($area, $startYear, $endYear);
+            if ($precomputed) {
+                $this->cacheResult($area, $startYear, $endYear, $period, $precomputed);
+                return $precomputed;
+            }
         }
 
         try {
@@ -2022,5 +2031,66 @@ class GoogleEarthEngineService
         }
         
         return 0;
+    }
+
+    private function getPrecomputedStatistics(Region|District $area, int $startYear, int $endYear): ?array
+    {
+        $areaType = $area instanceof Region ? 'region' : 'district';
+
+        $query = PrecomputedErosionMap::where('area_type', $areaType)
+            ->where('area_id', $area->id)
+            ->where('year', $startYear)
+            ->where('status', 'completed');
+
+        if ($endYear !== $startYear) {
+            $query->where('metadata->period->end_year', $endYear);
+        }
+
+        $map = $query->first();
+        if (!$map) {
+            return null;
+        }
+
+        $statistics = $map->statistics ?? [];
+        $metadata   = $map->metadata ?? [];
+
+        $rainfallStats = $statistics['rainfallStatistics']
+            ?? $statistics['rainfall_statistics']
+            ?? $metadata['rainfall_statistics']
+            ?? null;
+
+        if ($rainfallStats) {
+            $statistics['rainfallStatistics'] = $rainfallStats;
+
+            if (!isset($statistics['rainfallSlope'])) {
+                $meanAnnual = (float) ($rainfallStats['mean_annual_rainfall_mm'] ?? 0);
+                $trend = (float) ($rainfallStats['trend_mm_per_year'] ?? 0);
+                $statistics['rainfallSlope'] = $meanAnnual !== 0.0
+                    ? round(($trend / $meanAnnual) * 100, 2)
+                    : round($trend, 2);
+            }
+
+            if (!isset($statistics['rainfallCV']) && isset($rainfallStats['coefficient_of_variation_percent'])) {
+                $statistics['rainfallCV'] = (float) $rainfallStats['coefficient_of_variation_percent'];
+            }
+        }
+
+        $periodMeta = $metadata['period'] ?? [];
+        $period = [
+            'start_year' => $periodMeta['start_year'] ?? $startYear,
+            'end_year'   => $periodMeta['end_year'] ?? $endYear,
+            'label'      => $periodMeta['label']
+                ?? ($startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}"),
+        ];
+
+        return [
+            'tiles'       => null,
+            'period'      => $period,
+            'statistics'  => $statistics,
+            'source'      => 'precomputed_cache',
+            'timestamp'   => $map->computed_at?->toIso8601String(),
+            'factors'     => $statistics['rusle_factors'] ?? [],
+            'metadata'    => $metadata,
+        ];
     }
 }

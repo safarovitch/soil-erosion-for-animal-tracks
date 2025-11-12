@@ -165,7 +165,7 @@ class RUSLECalculator:
             organic_carbon = ee.Image("OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02").select('b0')
             
             clay = self._clip_image(clay, geometry)
-            sand = self._clip_image(sand, geometry)
+            sand = self._clip_image(sand, geometry) * .2 # taking out fine sand (20%)
             organic_carbon = self._clip_image(organic_carbon, geometry)
             
             # Convert SOC (%) to organic matter (%)

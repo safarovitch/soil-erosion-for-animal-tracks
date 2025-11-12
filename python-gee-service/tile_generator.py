@@ -242,7 +242,7 @@ class MapTileGenerator:
         tile_count = 0
         for tile in self._iter_tiles_covering_bounds(bounds, zoom):
             tile_bounds = mercantile.xy_bounds(tile)  # Web Mercator meters
-            
+
             tile_image = self._render_tile(
                 data,
                 bounds,
@@ -250,10 +250,10 @@ class MapTileGenerator:
                 transform,
                 geometry_json
             )
-            
+
             if tile_image is None:
                 continue
-            
+
             tile_path = tiles_dir / str(zoom) / str(tile.x)
             tile_path.mkdir(parents=True, exist_ok=True)
             tile_image.save(tile_path / f'{tile.y}.png', 'PNG', optimize=True)
@@ -365,7 +365,7 @@ class MapTileGenerator:
         lat_max += padding
 
         return mercantile.tiles(lon_min, lat_min, lon_max, lat_max, [zoom], truncate=True)
-
+    
     def _create_geometry_mask(self, geometry_json, tile_bounds, tile_size):
         """
         Create a mask for the tile based on geometry boundaries
@@ -380,23 +380,23 @@ class MapTileGenerator:
         """
         try:
             from shapely.geometry import shape, box
-
+            
             tile_polygon = box(
                 tile_bounds.left, tile_bounds.bottom,
                 tile_bounds.right, tile_bounds.top
             )
-
+            
             geom = shape(geometry_json)
-
+            
             if not tile_polygon.intersects(geom):
                 return Image.new('L', (tile_size, tile_size), 0)
-
+            
             mask = Image.new('L', (tile_size, tile_size), 0)
             draw = ImageDraw.Draw(mask)
-
+            
             x_range = tile_bounds.right - tile_bounds.left
             y_range = tile_bounds.top - tile_bounds.bottom
-
+            
             def to_pixel(x, y):
                 px = int(((x - tile_bounds.left) / x_range) * tile_size)
                 py = int(((tile_bounds.top - y) / y_range) * tile_size)
@@ -420,9 +420,9 @@ class MapTileGenerator:
                             hole_pixels = [to_pixel(x, y) for x, y in interior.coords]
                             if len(hole_pixels) > 2:
                                 draw.polygon(hole_pixels, fill=0)
-
+            
             return mask
-
+            
         except ImportError:
             logger.warning("shapely not available, skipping boundary masking")
             return None

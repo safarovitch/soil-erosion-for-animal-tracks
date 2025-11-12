@@ -848,6 +848,58 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
 
         loadingMessage.value = `Calculating RUSLE statistics (${index + 1}/${total})...`;
 
+        let cachedStatistics = null;
+
+        let cachedPeriodLabel = null;
+
+        if (areaType !== "country") {
+            try {
+                const availabilityResponse = await axios.post(
+                    "/api/erosion/check-availability",
+                    {
+                        area_type: areaType,
+                        area_id: areaId,
+                        start_year: startYear,
+                        end_year: endYear,
+                    }
+                );
+
+                const availability = availabilityResponse.data || {};
+
+                if (
+                    availability.status === "available" &&
+                    availability.statistics
+                ) {
+                    cachedStatistics = availability.statistics;
+                    cachedPeriodLabel =
+                        availability.period_label ||
+                        (startYear === endYear
+                            ? `${startYear}`
+                            : `${startYear}-${endYear}`);
+                    loadingMessage.value = `Loading cached RUSLE statistics (${index + 1}/${total})...`;
+                }
+            } catch (error) {
+                console.warn(
+                    "Cached statistics check failed, falling back to live computation:",
+                    error?.message || error
+                );
+            }
+        }
+
+        if (cachedStatistics) {
+            return {
+                key: buildDetailedLayerKey(areaType, areaId, startYear, endYear),
+                area,
+                areaType,
+                periodLabel:
+                    cachedPeriodLabel ||
+                    (startYear === endYear
+                        ? `${startYear}`
+                        : `${startYear}-${endYear}`),
+                statistics: cachedStatistics,
+            };
+        }
+
         const response = await fetch("/api/erosion/compute", {
             method: "POST",
             headers: {

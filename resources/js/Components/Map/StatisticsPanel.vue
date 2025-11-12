@@ -426,8 +426,26 @@ const formattedEntries = computed(() =>
       }
     })
 
-    const rainfallSlope = Number(stats.rainfallSlope ?? 0)
-    const rainfallCV = Number(stats.rainfallCV ?? 0)
+    let rainfallSlope = Number(stats.rainfallSlope ?? stats.rainfall_slope ?? 0)
+    let rainfallCV = Number(stats.rainfallCV ?? stats.rainfall_cv ?? 0)
+
+    const rainfallStats =
+      stats.rainfallStatistics || stats.rainfall_statistics || null
+
+    if (rainfallStats && (!rainfallSlope || !Number.isFinite(rainfallSlope))) {
+      const meanAnnual = Number(rainfallStats.mean_annual_rainfall_mm ?? 0)
+      const trend = Number(rainfallStats.trend_mm_per_year ?? 0)
+      if (meanAnnual) {
+        rainfallSlope = Number(((trend / meanAnnual) * 100).toFixed(2))
+      } else if (Number.isFinite(trend)) {
+        rainfallSlope = Number(trend.toFixed(2))
+      }
+    }
+
+    if (rainfallStats && (!rainfallCV || !Number.isFinite(rainfallCV))) {
+      const cv = Number(rainfallStats.coefficient_of_variation_percent ?? 0)
+      rainfallCV = Number(cv.toFixed(2))
+    }
 
     const entryTimeSeries = Array.isArray(entry.timeSeries) ? entry.timeSeries : []
 
@@ -452,6 +470,7 @@ const formattedEntries = computed(() =>
       topErodingAreas,
       hasTopAreas: topErodingAreas.length > 0,
       rusleFactors,
+      rainfallStatistics: rainfallStats,
       timeSeries:
         entryTimeSeries.length > 0
           ? entryTimeSeries

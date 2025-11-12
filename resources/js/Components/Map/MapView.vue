@@ -2780,9 +2780,7 @@ const highlightSelectedAreas = (selectedAreas) => {
                         });
 
                         feature.setStyle(
-                            new Style({
-                                defaultAreaStyle,
-                            })
+                            selectedAreaStyle
                         );
                     });
 
@@ -2887,11 +2885,7 @@ const highlightSelectedAreas = (selectedAreas) => {
                                 areaType: area.type || area.area_type,
                                 isHighlighted: true,
                             });
-                            fallbackFeature.setStyle(
-                                new Style({
-                                    style: selectedAreaStyle,
-                                })
-                            );
+                            fallbackFeature.setStyle(selectedAreaStyle);
                             highlightFeatures.push(fallbackFeature);
                             console.log(
                                 `Created highlight from topoJsonLayer for area: ${area.name_en}`
@@ -2933,11 +2927,7 @@ const highlightSelectedAreas = (selectedAreas) => {
                     isFallback: true,
                 });
 
-                fallbackFeatureObj.setStyle(
-                    new Style({
-                        style: selectedAreaStyle,
-                    })
-                );
+                fallbackFeatureObj.setStyle(selectedAreaStyle);
 
                 highlightFeatures.push(fallbackFeatureObj);
                 console.log(
@@ -2986,10 +2976,7 @@ const highlightSelectedAreas = (selectedAreas) => {
 
                 // Style the highlighted feature
                 feature.setStyle(
-                    new Style({
-                        // No fill - only border for selected areas
-                        style: selectedAreaStyle,
-                    })
+                    selectedAreaStyle
                 );
 
                 highlightFeatures.push(feature);
@@ -3015,6 +3002,7 @@ const highlightSelectedAreas = (selectedAreas) => {
             source: highlightSource,
             zIndex: 20, // High z-index to appear on top
             title: "Selected Areas Highlight",
+            style: selectedAreaStyle,
         });
 
         map.value.addLayer(highlightLayer);

@@ -46,10 +46,11 @@ class ErosionTileService
         $map = $mapQuery->first();
 
         if ($map && $map->isAvailable()) {
+            $statistics = $this->enrichStatistics($map->statistics ?? null, $map->metadata ?? null);
             return [
                 'status' => 'available',
                 'tiles_url' => $map->tile_url,
-                'statistics' => $map->statistics,
+                'statistics' => $statistics,
                 'computed_at' => $map->computed_at?->toISOString(),
                 'start_year' => $startYear,
                 'end_year' => $endYear,
@@ -191,6 +192,43 @@ class ErosionTileService
         return $startYear === $endYear
             ? (string) $startYear
             : "{$startYear}-{$endYear}";
+    }
+
+    private function enrichStatistics(?array $statistics, ?array $metadata): ?array
+    {
+        if (!is_array($statistics)) {
+            $statistics = $statistics === null ? [] : (array) $statistics;
+        }
+
+        $rainfallStats = $metadata['rainfall_statistics'] ?? null;
+
+        if (!is_array($rainfallStats) || empty($rainfallStats)) {
+            return $statistics ?: null;
+        }
+
+        $meanAnnual = $rainfallStats['mean_annual_rainfall_mm'] ?? null;
+        $trend = $rainfallStats['trend_mm_per_year'] ?? null;
+
+        $slopePercent = null;
+        if (is_numeric($trend)) {
+            if (is_numeric($meanAnnual) && (float) $meanAnnual !== 0.0) {
+                $slopePercent = round(((float) $trend / (float) $meanAnnual) * 100, 2);
+            } else {
+                $slopePercent = round((float) $trend, 2);
+            }
+        }
+
+        if ($slopePercent !== null) {
+            $statistics['rainfallSlope'] = $slopePercent;
+        }
+
+        if (isset($rainfallStats['coefficient_of_variation_percent']) && is_numeric($rainfallStats['coefficient_of_variation_percent'])) {
+            $statistics['rainfallCV'] = round((float) $rainfallStats['coefficient_of_variation_percent'], 2);
+        }
+
+        $statistics['rainfallStatistics'] = $rainfallStats;
+
+        return $statistics;
     }
 
     /**
@@ -343,6 +381,7 @@ class ErosionTileService
             Log::warning("No map found for {$areaType} {$areaId}, period {$periodLabel}");
             
             // Create new record
+            $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
             $map = PrecomputedErosionMap::create([
                 'area_type' => $areaType,
                 'area_id' => $areaId,
@@ -350,7 +389,7 @@ class ErosionTileService
                 'status' => 'completed',
                 'geotiff_path' => $data['geotiff_path'] ?? null,
                 'tiles_path' => $data['tiles_path'] ?? null,
-                'statistics' => $data['statistics'] ?? null,
+                'statistics' => $statistics,
                 'metadata' => array_merge(
                     [
                         'task_id' => $taskId,
@@ -380,11 +419,12 @@ class ErosionTileService
                 'label' => $periodLabel,
             ];
 
+            $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
             $map->update([
                 'status' => 'completed',
                 'geotiff_path' => $data['geotiff_path'] ?? null,
                 'tiles_path' => $data['tiles_path'] ?? null,
-                'statistics' => $data['statistics'] ?? null,
+                'statistics' => $statistics,
                 'metadata' => $updatedMetadata,
                 'computed_at' => now(),
                 'error_message' => null
@@ -393,9 +433,12 @@ class ErosionTileService
             Log::info("Map updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
         }
 
+        $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
+
         return [
             'status' => 'completed',
-            'map_id' => $map->id
+            'map_id' => $map->id,
+            'statistics' => $statistics
         ];
     }
 
