@@ -3,7 +3,7 @@
     <div
       v-if="visible"
       :class="[
-        'fixed top-4 right-4 z-50 max-w-md rounded-lg shadow-2xl p-4 flex items-start space-x-3',
+        'relative w-full max-w-md rounded-lg shadow-2xl p-4 flex items-start space-x-3 pointer-events-auto',
         typeClass
       ]"
     >

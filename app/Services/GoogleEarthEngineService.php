@@ -452,6 +452,18 @@ class GoogleEarthEngineService
         $topAreas = [];
         $componentSummaries = [];
 
+        $labelMap = [
+            'very low' => 'Very Low',
+            'very_low' => 'Very Low',
+            'low' => 'Low',
+            'moderate' => 'Moderate',
+            'high' => 'Severe',
+            'severe' => 'Severe',
+            'excessive' => 'Excessive',
+            'very high' => 'Excessive',
+            'very_high' => 'Excessive',
+        ];
+
         foreach ($components as $component) {
             /** @var \App\Models\District $district */
             $district = $component['district'];
@@ -490,8 +502,23 @@ class GoogleEarthEngineService
                 $varianceSum += $componentArea * ($mean ** 2);
             }
 
-            $compMin = isset($stats['min_erosion_rate']) ? (float) $stats['min_erosion_rate'] : null;
-            $compMax = isset($stats['max_erosion_rate']) ? (float) $stats['max_erosion_rate'] : null;
+        $compMin = null;
+        if (isset($stats['min_erosion_rate'])) {
+            $compMin = (float) $stats['min_erosion_rate'];
+        } elseif (isset($stats['min_erosion'])) {
+            $compMin = (float) $stats['min_erosion'];
+        } elseif (isset($stats['min'])) {
+            $compMin = (float) $stats['min'];
+        }
+
+        $compMax = null;
+        if (isset($stats['max_erosion_rate'])) {
+            $compMax = (float) $stats['max_erosion_rate'];
+        } elseif (isset($stats['max_erosion'])) {
+            $compMax = (float) $stats['max_erosion'];
+        } elseif (isset($stats['max'])) {
+            $compMax = (float) $stats['max'];
+        }
 
             if ($compMin !== null) {
                 $minErosion = $minErosion !== null ? min($minErosion, $compMin) : $compMin;
@@ -531,6 +558,11 @@ class GoogleEarthEngineService
                     continue;
                 }
 
+                $normalizedLabel = $labelMap[strtolower((string) $classLabel)] ?? $classLabel;
+                if (!array_key_exists($normalizedLabel, $severityTotals)) {
+                    $severityTotals[$normalizedLabel] = 0.0;
+                }
+
                 $areaValue = $item['area'] ?? $item['area_hectares'] ?? null;
                 if ($areaValue === null && isset($item['percentage'])) {
                     $areaValue = ($componentArea * (float) $item['percentage']) / 100.0;
@@ -540,11 +572,7 @@ class GoogleEarthEngineService
                     continue;
                 }
 
-                if (!array_key_exists($classLabel, $severityTotals)) {
-                    $severityTotals[$classLabel] = 0.0;
-                }
-
-                $severityTotals[$classLabel] += (float) $areaValue;
+                $severityTotals[$normalizedLabel] += (float) $areaValue;
             }
 
             $componentFactors = $result['factors'] ?? [];
@@ -1997,9 +2025,23 @@ class GoogleEarthEngineService
         $props = $geeResult['properties'] ?? $geeResult;
         
         // Extract main erosion statistics - throw error if missing
-        $meanErosion = $props['soil_erosion_hazard_mean'] ?? $props['mean'] ?? null;
-        $minErosion = $props['soil_erosion_hazard_min'] ?? $props['min'] ?? null;
-        $maxErosion = $props['soil_erosion_hazard_max'] ?? $props['max'] ?? null;
+        $meanErosion = $props['soil_erosion_hazard_mean']
+            ?? $props['mean_erosion_rate']
+            ?? $props['mean_erosion']
+            ?? $props['mean']
+            ?? null;
+
+        $minErosion = $props['soil_erosion_hazard_min']
+            ?? $props['min_erosion_rate']
+            ?? $props['min_erosion']
+            ?? $props['min']
+            ?? null;
+
+        $maxErosion = $props['soil_erosion_hazard_max']
+            ?? $props['max_erosion_rate']
+            ?? $props['max_erosion']
+            ?? $props['max']
+            ?? null;
         $stdDev = $props['soil_erosion_hazard_stdDev'] ?? $props['stdDev'] ?? null;
         
         // Validate required statistics - throw error if missing
@@ -2095,7 +2137,11 @@ class GoogleEarthEngineService
         
         // Estimate distribution based on mean and standard deviation
         // This is an approximation - real data would come from histogram
-        $stdDev = $geeResult['properties']['soil_erosion_hazard_stdDev'] ?? ($meanErosion * 0.5);
+        $stdDev = $geeResult['properties']['soil_erosion_hazard_stdDev'] ?? null;
+        if ($stdDev === null || $stdDev <= 0) {
+            // Assume coefficient of variation of 50% as default variability
+            $stdDev = max(0.0001, $meanErosion * 0.5);
+        }
         
         // Assume normal distribution and calculate percentages in each class
         $distribution = [];
@@ -2109,8 +2155,8 @@ class GoogleEarthEngineService
         
         foreach ($classes as $class) {
             // Calculate z-scores for class boundaries
-            $zMin = ($class['min'] - $meanErosion) / $stdDev;
-            $zMax = ($class['max'] - $meanErosion) / $stdDev;
+            $zMin = $stdDev > 0 ? ($class['min'] - $meanErosion) / $stdDev : ($class['min'] > $meanErosion ? 1 : -1);
+            $zMax = $stdDev > 0 ? ($class['max'] - $meanErosion) / $stdDev : ($class['max'] > $meanErosion ? 1 : -1);
             
             // Approximate percentage using error function
             $pctMin = $this->normalCDF($zMin);
@@ -2124,6 +2170,19 @@ class GoogleEarthEngineService
             ];
         }
         
+        // Normalize to ensure percentages sum to 100
+        $totalPercentage = array_reduce($distribution, static fn ($carry, $item) => $carry + ($item['percentage'] ?? 0), 0);
+        if ($totalPercentage > 0) {
+            $scale = 100.0 / $totalPercentage;
+            foreach ($distribution as $index => $item) {
+                $adjustedPercentage = round(($item['percentage'] ?? 0) * $scale, 1);
+                $distribution[$index]['percentage'] = $adjustedPercentage;
+                if ($totalArea > 0) {
+                    $distribution[$index]['area'] = round($totalArea * ($adjustedPercentage / 100.0), 2);
+                }
+            }
+        }
+
         return $distribution;
     }
 

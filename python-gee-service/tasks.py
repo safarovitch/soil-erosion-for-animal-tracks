@@ -186,7 +186,7 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
         }
         
         logger.info(f"=== Task completed successfully ===")
-        logger.info(f"Result: {json.dumps(result, indent=2)}")
+        # logger.info(f"Result: {json.dumps(result, indent=2)}")
         
         return result
         

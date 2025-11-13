@@ -7,15 +7,20 @@
             :message="loadingMessage"
         />
 
-        <!-- Toast Notification -->
-        <ToastNotification
-            :show="toast.show"
-            :type="toast.type"
-            :title="toast.title"
-            :message="toast.message"
-            :details="toast.details"
-            @close="toast.show = false"
-        />
+        <!-- Toast Notifications (stacked) -->
+        <div class="fixed top-4 right-4 z-50 flex flex-col space-y-3 pointer-events-none">
+            <ToastNotification
+                v-for="toastItem in toasts"
+                :key="toastItem.id"
+                :show="toastItem.show"
+                :type="toastItem.type"
+                :title="toastItem.title"
+                :message="toastItem.message"
+                :details="toastItem.details"
+                :duration="toastItem.duration"
+                @close="handleToastClose(toastItem.id)"
+            />
+        </div>
 
         <!-- Main Content -->
         <div class="flex flex-1 overflow-hidden relative">
@@ -166,23 +171,27 @@
                             </option>
                         </select>
                     </div>
-                    <button
-                        @click="exportMapAsPNG"
-                        class="px-3 py-2 bg-white rounded-lg shadow-lg hover:bg-gray-50 flex items-center space-x-2"
-                        title="Export map as PNG"
+                    <div
+                        class="px-3 py-2 bg-white rounded-lg shadow-lg flex items-center space-x-2"
+                        title="Change base map style"
                     >
-                        <span class="text-lg">📷</span>
-                        <span class="text-sm font-medium">Export PNG</span>
-                    </button>
-                    <button
-                        @click="exportStatisticsCSV"
-                        :disabled="!statistics"
-                        class="px-3 py-2 bg-white rounded-lg shadow-lg hover:bg-gray-50 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Export statistics as CSV"
-                    >
-                        <span class="text-lg">📊</span>
-                        <span class="text-sm font-medium">Export CSV</span>
-                    </button>
+                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                            Language
+                        </span>
+                        <select
+                            v-model="selectedLanguage"
+                            :disabled="!mapInstance || languageOptions.length <= 1"
+                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <option
+                                v-for="option in languageOptions"
+                                :key="option.id"
+                                :value="option.id"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </div>
                 </div>
 
                 <!-- Map Container - Fits remaining space -->
@@ -515,14 +524,9 @@ const loginLoading = ref(false);
 const analysisTrigger = ref(0);
 const needsApply = ref(true);
 
-// Toast notification
-const toast = reactive({
-    show: false,
-    type: "info",
-    title: "",
-    message: "",
-    details: "",
-});
+// Toast notifications (stacked)
+const toasts = ref([]);
+let toastCounter = 0;
 
 // Panel state
 const leftSidebarVisible = ref(true);
@@ -539,6 +543,109 @@ const regions = ref(
     })
 );
 const districts = ref(props.districts || []);
+
+const languageOptions = ref([
+    {
+        id: "en",
+        label: "English",
+        keys: ["name_en", "name"],
+    },
+    {
+        id: "tj",
+        label: "Тоҷикӣ",
+        keys: ["name_tj", "name_en", "name"],
+    },
+]);
+
+const storedLanguage = typeof window !== "undefined" ? window.localStorage?.getItem("map_language") : null;
+const selectedLanguage = ref(
+    (storedLanguage && languageOptions.value.some((option) => option.id === storedLanguage))
+        ? storedLanguage
+        : languageOptions.value[0]?.id || "en"
+);
+
+const currentLanguage = computed(() => {
+    return languageOptions.value.find((option) => option.id === selectedLanguage.value) || languageOptions.value[0] || {
+        id: "en",
+        label: "English",
+        keys: ["name_en", "name"],
+    };
+});
+
+const languageKeys = computed(() => currentLanguage.value?.keys || ["name_en", "name"]);
+
+const getLocalizedName = (entity, keys = languageKeys.value) => {
+    if (!entity || typeof entity !== "object") {
+        return "";
+    }
+
+    for (const key of keys) {
+        const value = entity[key];
+        if (typeof value === "string" && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+
+    return (
+        entity.display_name ||
+        entity.name_en ||
+        entity.name_tj ||
+        entity.name_ru ||
+        entity.name ||
+        (typeof entity.id !== "undefined" ? `Area ${entity.id}` : "Area")
+    );
+};
+
+const applyDisplayName = (entity) => {
+    if (entity && typeof entity === "object") {
+        entity.display_name = getLocalizedName(entity);
+    }
+    return entity;
+};
+
+const refreshDisplayNames = () => {
+    (regions.value || []).forEach((region) => applyDisplayName(region));
+    (districts.value || []).forEach((district) => applyDisplayName(district));
+
+    if (selectedArea.value) {
+        applyDisplayName(selectedArea.value);
+    }
+
+    selectedAreas.value = selectedAreas.value.map((area) => applyDisplayName(area));
+
+    areaStatistics.value = areaStatistics.value.map((entry) => {
+        if (entry && typeof entry === "object") {
+            if (entry.area) {
+                applyDisplayName(entry.area);
+            }
+            if (Array.isArray(entry.components)) {
+                entry.components.forEach((component) => {
+                    if (component?.area) {
+                        applyDisplayName(component.area);
+                    }
+                });
+            }
+        }
+        return entry;
+    });
+};
+
+watch(
+    languageKeys,
+    () => {
+        refreshDisplayNames();
+    },
+    { immediate: true }
+);
+
+watch(
+    selectedLanguage,
+    (newValue) => {
+        if (typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.setItem("map_language", newValue);
+        }
+    }
+);
 
 const canApply = computed(() => selectedAreas.value.length > 0 && !loading.value);
 
@@ -679,12 +786,42 @@ const isAuthenticated = computed(
 );
 
 // Methods
-const showToast = (type, title, message, details = "") => {
-    toast.type = type;
-    toast.title = title;
-    toast.message = message;
-    toast.details = details;
-    toast.show = true;
+const showToast = (type, title, message, details = "", options = {}) => {
+    toastCounter += 1;
+    const id = `toast-${Date.now()}-${toastCounter}`;
+
+    const toastEntry = {
+        id,
+        type,
+        title,
+        message,
+        details,
+        duration: typeof options.duration === "number" ? options.duration : 0,
+        show: true,
+    };
+
+    toasts.value = [...toasts.value, toastEntry];
+
+    const maxToasts = options.maxVisible ?? 5;
+    if (maxToasts > 0 && toasts.value.length > maxToasts) {
+        const excess = toasts.value.length - maxToasts;
+        const staleToasts = toasts.value.slice(0, excess);
+        staleToasts.forEach((stale) => handleToastClose(stale.id));
+    }
+};
+
+const handleToastClose = (id) => {
+    const index = toasts.value.findIndex((toastItem) => toastItem.id === id);
+    if (index === -1) {
+        return;
+    }
+
+    toasts.value[index].show = false;
+
+    // Allow leave transition to play before removing from array
+    setTimeout(() => {
+        toasts.value = toasts.value.filter((toastItem) => toastItem.id !== id);
+    }, 350);
 };
 
 const markAnalysisDirty = () => {
@@ -735,6 +872,7 @@ const applySelection = async () => {
         }
 
         let analysisAreas = [...areasToApply];
+        analysisAreas.forEach((area) => applyDisplayName(area));
 
         const totalRegions = regions.value.length;
         const selectedRegionsOnly =
@@ -772,10 +910,11 @@ const applySelection = async () => {
                     geometry: countryBoundary,
                 },
             ];
+            analysisAreas.forEach((area) => applyDisplayName(area));
         }
 
         const primaryArea = analysisAreas[0] || null;
-        selectedArea.value = primaryArea || null;
+        selectedArea.value = primaryArea ? applyDisplayName(primaryArea) : null;
 
         loading.value = true;
         progress.value = 0;
@@ -804,6 +943,21 @@ const applySelection = async () => {
                     ((index + 1) / analysisAreas.length) * 100
                 );
             }
+
+            results.forEach((entry) => {
+                if (entry && typeof entry === "object") {
+                    if (entry.area) {
+                        applyDisplayName(entry.area);
+                    }
+                    if (Array.isArray(entry.components)) {
+                        entry.components.forEach((component) => {
+                            if (component?.area) {
+                                applyDisplayName(component.area);
+                            }
+                        });
+                    }
+                }
+            });
 
             areaStatistics.value = results;
             const primaryEntry = results.find(
@@ -943,6 +1097,8 @@ const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
             return name && !name.includes('unknown') && !name.includes('dushanbe');
         });
         console.log(`Total regions available: ${regions.value.length}`);
+
+        refreshDisplayNames();
     } catch (error) {
         console.warn("Could not load districts from GeoJSON:", error.message);
     }
@@ -972,9 +1128,9 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
 
         return {
             meanErosionRate: mean,
-            minErosionRate: Number(rawStats.min_erosion_rate ?? 0),
-            maxErosionRate: Number(rawStats.max_erosion_rate ?? 0),
-            erosionCV: Number(rawStats.erosion_cv ?? 0),
+        minErosionRate: Number(rawStats.min_erosion_rate ?? rawStats.min_erosion ?? rawStats.min ?? 0),
+        maxErosionRate: Number(rawStats.max_erosion_rate ?? rawStats.max_erosion ?? rawStats.max ?? 0),
+        erosionCV: Number(rawStats.erosion_cv ?? rawStats.cv ?? 0),
             bareSoilFrequency: Number(rawStats.bare_soil_frequency ?? 0),
             sustainabilityFactor: Number(rawStats.sustainability_factor ?? 0),
             rainfallSlope: slopeValue,
@@ -1133,9 +1289,10 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                         id: component.area_id,
                         area_type: componentAreaType,
                         region_id: component.region_id ?? area.id,
-                        name_en: component.name || component.name_en || area.name_en,
+                        name_en: component.name || component.name_en || getLocalizedName(area),
                         name_tj: component.name_tj || null,
                     };
+                    applyDisplayName(componentArea);
 
                     return {
                         key: `${buildDetailedLayerKey(
@@ -1164,14 +1321,15 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                             null,
                         parentAreaName:
                             component.parent_area_name ??
-                            area.name_en ??
-                            area.name ??
+                            getLocalizedName(area) ??
                             null,
                     };
                 })
                 .filter(Boolean);
 
-            return {
+        applyDisplayName(area);
+
+        return {
                 key: buildDetailedLayerKey(areaType, areaId, startYear, endYear),
                 area,
                 areaType,
@@ -1200,7 +1358,24 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             }),
         });
 
-        const data = await response.json();
+        const rawBody = await response.text();
+        let data = {};
+
+        if (rawBody) {
+            try {
+                data = JSON.parse(rawBody);
+            } catch (parseError) {
+                console.error("Statistics response was not valid JSON:", {
+                    status: response.status,
+                    bodySnippet: rawBody.slice(0, 500),
+                    error: parseError,
+                });
+                throw new Error(
+                    `Unexpected response (status ${response.status}).` +
+                    " Server returned non-JSON content."
+                );
+            }
+        }
 
         if (!data.success || !data.data || !data.data.statistics) {
             throw new Error(data.error || "Failed to compute statistics");
@@ -1261,6 +1436,8 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             rainfallCV
         );
 
+        applyDisplayName(area);
+
         const componentSummaries = Array.isArray(data.data.components)
             ? data.data.components
             : [];
@@ -1289,9 +1466,10 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                     id: componentAreaId,
                     area_type: componentAreaType,
                     region_id: component.region_id ?? area.id,
-                    name_en: component.name || component.name_en || area.name_en,
+                    name_en: component.name || component.name_en || getLocalizedName(area),
                     name_tj: component.name_tj || null,
                 };
+                applyDisplayName(componentArea);
 
                 return {
                     key: `${buildDetailedLayerKey(
@@ -1312,7 +1490,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                     parentAreaId:
                         component.parent_area_id ?? area.id ?? component.region_id ?? null,
                     parentAreaName:
-                        component.parent_area_name ?? area.name_en ?? area.name ?? null,
+                        component.parent_area_name ?? getLocalizedName(area) ?? null,
                 };
             })
             .filter(Boolean);
@@ -1330,7 +1508,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
         showToast(
             "error",
             "Statistics Calculation Failed",
-            `Could not calculate statistics for ${area.name_en || area.name}.`,
+            `Could not calculate statistics for ${getLocalizedName(area)}.`,
             error.message
         );
         return null;
@@ -1338,9 +1516,9 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
 };
 
 const handleRegionChange = (region) => {
-    selectedRegion.value = region;
+    selectedRegion.value = region ? applyDisplayName(region) : null;
     selectedDistrict.value = null;
-    selectedArea.value = region;
+    selectedArea.value = region ? applyDisplayName(region) : null;
     markAnalysisDirty();
 
     if (mapView.value && region?.area_type !== 'country') {
@@ -1349,7 +1527,7 @@ const handleRegionChange = (region) => {
 };
 
 const handleDistrictChange = (district) => {
-    selectedArea.value = district;
+    selectedArea.value = district ? applyDisplayName(district) : null;
     markAnalysisDirty();
 
     if (mapView.value && district) {
@@ -1370,12 +1548,13 @@ const handleDistrictClicked = (districtData) => {
     );
 
     if (district) {
-        selectedDistrict.value = district;
+        const localizedDistrict = applyDisplayName(district);
+        selectedDistrict.value = localizedDistrict;
         selectedRegion.value = null; // Clear region selection when district is selected
-        selectedArea.value = district;
+        selectedArea.value = localizedDistrict;
 
         // Update selected areas for highlighting
-        selectedAreas.value = [district];
+        selectedAreas.value = [localizedDistrict];
 
         markAnalysisDirty();
 
@@ -1402,12 +1581,13 @@ const handleRegionClicked = (regionData) => {
     );
 
     if (region) {
-        selectedRegion.value = region;
+        const localizedRegion = applyDisplayName(region);
+        selectedRegion.value = localizedRegion;
         selectedDistrict.value = null; // Clear district selection when region is selected
-        selectedArea.value = region;
+        selectedArea.value = localizedRegion;
 
         // Update selected areas for highlighting
-        selectedAreas.value = [region];
+        selectedAreas.value = [localizedRegion];
 
         markAnalysisDirty();
 
@@ -1445,6 +1625,8 @@ const handleAreaToggleSelection = (areaData) => {
         );
 
     if (area) {
+        const localizedArea = applyDisplayName(area);
+
         // Check if area is already selected
         const isAlreadySelected = selectedAreas.value.some(
             (a) => a.id === area.id && a.region_id === area.region_id
@@ -1464,25 +1646,27 @@ const handleAreaToggleSelection = (areaData) => {
             }
         } else {
             // Add to selection
-            selectedAreas.value = [...selectedAreas.value, area];
+            selectedAreas.value = [...selectedAreas.value, localizedArea];
             
             // Update individual selections (use the last selected as primary)
             if (isDistrict) {
-                selectedDistrict.value = area;
+                selectedDistrict.value = localizedArea;
                 selectedRegion.value = null;
             } else {
-                selectedRegion.value = area;
+                selectedRegion.value = localizedArea;
                 selectedDistrict.value = null;
             }
         }
 
         // Update selectedArea to first selected for backward compatibility
         if (selectedAreas.value.length > 0) {
-            selectedArea.value = selectedAreas.value[0];
+            selectedArea.value = applyDisplayName(selectedAreas.value[0]);
         } else {
             selectedArea.value = null;
             statistics.value = null;
         }
+
+        selectedAreas.value = selectedAreas.value.map((area) => applyDisplayName(area));
 
         markAnalysisDirty();
 
@@ -1563,7 +1747,8 @@ const selectAllAvailableAreas = () => {
     if (regions.value && regions.value.length > 0) {
         regions.value.forEach((region) => {
             if (region.geometry) {
-                allAreas.push({ ...region, type: "region" });
+                const localizedRegion = applyDisplayName({ ...region, type: "region" });
+                allAreas.push(localizedRegion);
             }
         });
         console.log(`Added ${regions.value.length} regions`);
@@ -1573,18 +1758,22 @@ const selectAllAvailableAreas = () => {
     if (districts.value && districts.value.length > 0) {
         districts.value.forEach((district) => {
             if (district.geometry) {
-                allAreas.push({ ...district, type: "district" });
+                const localizedDistrict = applyDisplayName({
+                    ...district,
+                    type: "district",
+                });
+                allAreas.push(localizedDistrict);
             }
         });
         console.log(`Added ${districts.value.length} districts`);
     }
 
     // Update selected areas
-    selectedAreas.value = allAreas;
+    selectedAreas.value = allAreas.map((area) => applyDisplayName(area));
 
     // Update selectedArea to the first area for backward compatibility
     if (allAreas.length > 0) {
-        selectedArea.value = allAreas[0];
+        selectedArea.value = applyDisplayName(allAreas[0]);
     }
 
     console.log(`Auto-selected ${allAreas.length} total areas`);
@@ -1602,14 +1791,14 @@ const handleAreasChange = (newSelectedAreas) => {
 
     // Update selectedArea to the first area for backward compatibility
     if (newSelectedAreas.length > 0) {
-        selectedArea.value = newSelectedAreas[0];
+        selectedArea.value = applyDisplayName(newSelectedAreas[0]);
     } else {
         selectedArea.value = null;
         statistics.value = null;
     }
 
     // Store all selected areas
-    selectedAreas.value = newSelectedAreas;
+    selectedAreas.value = newSelectedAreas.map((area) => applyDisplayName(area));
     markAnalysisDirty();
 
     // Highlight selected areas immediately for visual feedback
@@ -1783,9 +1972,9 @@ const loadErosionData = async () => {
                 // Update statistics display with comprehensive data
                 statistics.value = {
                     meanErosionRate: erosionRate.toFixed(2),
-                    minErosionRate: (stats.min_erosion_rate || 0).toFixed(2),
-                    maxErosionRate: (stats.max_erosion_rate || 0).toFixed(2),
-                    erosionCV: (stats.erosion_cv || 0).toFixed(1),
+        minErosionRate: (stats.min_erosion_rate ?? stats.min ?? 0).toFixed(2),
+        maxErosionRate: (stats.max_erosion_rate ?? stats.max ?? 0).toFixed(2),
+        erosionCV: (stats.erosion_cv ?? stats.cv ?? 0).toFixed(1),
                     bareSoilFrequency: (stats.bare_soil_frequency || 0).toFixed(
                         1
                     ),
@@ -1886,10 +2075,10 @@ const analyzeGeometry = async (geometry) => {
             };
 
             // Set selected area to the drawn shape
-            selectedArea.value = {
+            selectedArea.value = applyDisplayName({
                 name: "Custom Drawn Area",
                 name_en: "Custom Drawn Area",
-            };
+            });
         }
     } catch (error) {
         console.error("Failed to analyze geometry:", error);
@@ -2167,7 +2356,11 @@ const exportStatisticsCSV = () => {
                 csvData.push(["Name", "Erosion (t/ha/yr)"]);
                 stats.topErodingAreas.forEach((area) => {
                     csvData.push([
-                        area.name || area.name_en || area.name_tj || "Unknown",
+                        area.display_name ||
+                            area.name ||
+                            area.name_en ||
+                            area.name_tj ||
+                            "Unknown",
                         area.erosion || area.erosion_rate || area.mean_erosion_rate || 0,
                     ]);
                 });
@@ -2426,10 +2619,10 @@ const loadCountryWideData = async () => {
             };
         }
 
-        selectedArea.value = {
+        selectedArea.value = applyDisplayName({
             name: "Tajikistan (Country-wide)",
             name_en: "Tajikistan",
-        };
+        });
 
         progress.value = 100;
         loadingMessage.value = "Complete!";

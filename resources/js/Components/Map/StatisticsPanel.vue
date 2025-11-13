@@ -7,22 +7,7 @@
           - {{ panelSubtitle }}
         </span>
       </h3>
-      <div class="flex space-x-2">
-        <button
-          @click="exportPNG"
-          class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-          title="Export as PNG"
-        >
-          📷 PNG
-        </button>
-        <button
-          @click="exportCSV"
-          class="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
-          title="Export as CSV"
-        >
-          📊 CSV
-        </button>
-      </div>
+
     </div>
 
     <div class="border-b border-gray-200 mb-4">
@@ -146,6 +131,17 @@
                   <td class="text-right py-2">{{ item.percentage.toFixed(1) }}%</td>
                 </tr>
               </tbody>
+              <tfoot>
+                <tr class="border-t font-semibold text-gray-700">
+                  <td class="py-2">Total</td>
+                  <td class="text-right py-2">
+                    {{ (entry.severityTotals?.totalArea ?? entry.severityTotals?.area ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}
+                  </td>
+                  <td class="text-right py-2">
+                    {{ (entry.severityTotals?.percentage ?? 0).toFixed(1) }}%
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
 
@@ -368,6 +364,7 @@ const displayEntries = computed(() => {
     const area = props.selectedArea || {}
     const areaType = resolveAreaType(area, area.type)
     const name =
+      area.display_name ||
       area.name_en ||
       area.name ||
       (areaType === 'country' ? 'Country' : 'Selected Area')
@@ -390,20 +387,93 @@ const displayEntries = computed(() => {
 const formattedEntries = computed(() =>
   displayEntries.value.map((entry, index) => {
     const stats = entry.statistics || {}
-    const severityRaw =
+
+    const totalArea =
+      Number(
+        stats.total_area ??
+          stats.totalArea ??
+          stats.total_area_hectares ??
+          stats.totalAreaHectares ??
+          0
+      ) || 0
+
+    const severitySource =
       Array.isArray(stats.severityDistribution) && stats.severityDistribution.length
         ? stats.severityDistribution
         : Array.isArray(stats.severity_distribution) && stats.severity_distribution.length
         ? stats.severity_distribution
-        : defaultSeverity
+        : []
 
-    const severityDistribution = severityRaw.map((item) => ({
-      class: item.class || item.name || 'Class',
-      area: Number(item.area ?? 0),
-      percentage: Number(item.percentage ?? 0),
-    }))
+    const severityOrder = ['Very Low', 'Low', 'Moderate', 'Severe', 'Excessive']
 
-    const hasSeverityData = severityDistribution.some((item) => item.percentage > 0)
+    const severityDistribution = severityOrder.map((label, orderIdx) => {
+      const matchingItem = severitySource.find((item) => {
+        const itemLabel = (item.class || item.name || '').toLowerCase()
+        return itemLabel === label.toLowerCase()
+      }) ?? severitySource[orderIdx] ?? {}
+
+      let area = Number(
+        matchingItem.area ??
+          matchingItem.area_hectares ??
+          matchingItem.areaHa ??
+          matchingItem.area_ha ??
+          0
+      )
+      let percentage = Number(
+        matchingItem.percentage ??
+          matchingItem.percent ??
+          matchingItem.share ??
+          matchingItem.percentage_of_area ??
+          0
+      )
+
+      if (!Number.isFinite(area) || area < 0) {
+        area = 0
+      }
+
+      if (!Number.isFinite(percentage) || percentage < 0) {
+        percentage = 0
+      }
+
+      if (totalArea > 0) {
+        if (area <= 0 && percentage > 0) {
+          area = (percentage / 100) * totalArea
+        } else if (percentage <= 0 && area > 0) {
+          percentage = (area / totalArea) * 100
+        }
+      }
+
+      return {
+        class: label,
+        area,
+        percentage,
+      }
+    })
+
+    let areaSum = severityDistribution.reduce((sum, item) => sum + item.area, 0)
+    let percentageSum = severityDistribution.reduce(
+      (sum, item) => sum + item.percentage,
+      0
+    )
+
+    if (totalArea > 0 && areaSum > 0) {
+      const discrepancy = totalArea - areaSum
+      if (Math.abs(discrepancy) > totalArea * 0.05) {
+        severityDistribution[severityDistribution.length - 1].area += discrepancy
+        areaSum = severityDistribution.reduce((sum, item) => sum + item.area, 0)
+      }
+    }
+
+    if (percentageSum > 0 && Math.abs(percentageSum - 100) > 1) {
+      const adjustmentPct = 100 - percentageSum
+      severityDistribution[severityDistribution.length - 1].percentage += adjustmentPct
+      percentageSum = severityDistribution.reduce(
+        (sum, item) => sum + item.percentage,
+        0
+      )
+    }
+
+    const hasSeverityData = areaSum > 0 || percentageSum > 0
 
     const topAreasRaw = Array.isArray(stats.topErodingAreas)
       ? stats.topErodingAreas
@@ -449,16 +519,69 @@ const formattedEntries = computed(() =>
 
     const entryTimeSeries = Array.isArray(entry.timeSeries) ? entry.timeSeries : []
 
+    const severityThresholds = {
+      'Very Low': { min: 0, max: 5 },
+      Low: { min: 5, max: 15 },
+      Moderate: { min: 15, max: 30 },
+      Severe: { min: 30, max: 50 },
+      Excessive: { min: 50, max: null },
+    }
+
+    const rawMin =
+      Number(
+        stats.minErosionRate ??
+          stats.min_erosion_rate ??
+          stats.min ??
+          (stats.statistics ? stats.statistics.min_erosion_rate : null) ??
+          NaN
+      ) || NaN
+    const rawMax =
+      Number(
+        stats.maxErosionRate ??
+          stats.max_erosion_rate ??
+          stats.max ??
+          (stats.statistics ? stats.statistics.max_erosion_rate : null) ??
+          NaN
+      ) || NaN
+
+    let minForDisplay = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : null
+    let maxForDisplay = Number.isFinite(rawMax) && rawMax > 0 ? rawMax : null
+
+    if (minForDisplay === null) {
+      const firstClass = severityDistribution.find(
+        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.class]
+      )
+      if (firstClass) {
+        minForDisplay = severityThresholds[firstClass.class].min
+      }
+    }
+
+    if (maxForDisplay === null) {
+      const reversed = [...severityDistribution].reverse()
+      const lastClass = reversed.find(
+        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.class]
+      )
+      if (lastClass) {
+        maxForDisplay = severityThresholds[lastClass.class].max ?? Math.max(rawMax || 0, 50)
+      }
+    }
+
     return {
       key: entry.key,
-      areaName: entry.areaName,
+      areaName: entry.area.display_name || entry.areaName,
       areaType: entry.areaType,
       areaTypeLabel: areaTypeLabels[entry.areaType] || 'Area',
       badgeClass: areaBadgeClasses[entry.areaType] || areaBadgeClasses.default,
       erosion: {
-        mean: formatNumber(stats.meanErosionRate ?? 0, 2),
-        min: formatNumber(stats.minErosionRate ?? 0, 2),
-        max: formatNumber(stats.maxErosionRate ?? 0, 2),
+        mean: formatNumber(stats.meanErosionRate ?? stats.mean_erosion_rate ?? 0, 2),
+        min:
+          minForDisplay !== null
+            ? formatNumber(minForDisplay, 2)
+            : formatNumber(stats.minErosionRate ?? stats.min_erosion_rate ?? 0, 2),
+        max:
+          maxForDisplay !== null
+            ? formatNumber(maxForDisplay, 2)
+            : formatNumber(stats.maxErosionRate ?? stats.max_erosion_rate ?? 0, 2),
         cv: formatNumber(stats.erosionCV ?? 0, 1),
       },
       rainfall: {
@@ -467,6 +590,11 @@ const formattedEntries = computed(() =>
       },
       severityDistribution,
       hasSeverityData,
+      severityTotals: {
+        area: areaSum,
+        percentage: percentageSum,
+        totalArea,
+      },
       topErodingAreas,
       hasTopAreas: topErodingAreas.length > 0,
       rusleFactors,

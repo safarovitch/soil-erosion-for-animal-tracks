@@ -16,7 +16,7 @@
                                     " />
                                 <div>
                                     <div class="font-semibold text-gray-900 mb-1">
-                                        {{ region.name_tj }}
+                                        {{ region.display_name || region.name_tj || region.name_en || region.name }}
                                     </div>
                                     <p class="mt-1 text-xs text-gray-500">
                                         {{ regionDescription(region.id) }}
@@ -63,7 +63,7 @@
                                                 " />
                                     <div>
                                         <div class="font-medium text-gray-800">
-                                            {{ district.name_en }}
+                                            {{ district.display_name || district.name_en || district.name_tj || district.name }}
                                         </div>
                                         <div v-if="district.name_tj" class="text-xs text-gray-500">
                                             {{ district.name_tj }}
@@ -139,12 +139,22 @@ const districtsByRegion = computed(() => {
 });
 
 const regionsWithDistricts = computed(() => {
-    return (props.regions || []).map((region) => ({
-        ...region,
-        districts: (districtsByRegion.value.get(region.id) || []).sort((a, b) =>
-            (a.name_en || "").localeCompare(b.name_en || "")
-        ),
-    }));
+    return (props.regions || []).map((region) => {
+        const districts = (districtsByRegion.value.get(region.id) || []).slice().sort((a, b) =>
+            (a.display_name || a.name_en || a.name || "").localeCompare(
+                b.display_name || b.name_en || b.name || ""
+            )
+        );
+
+        return {
+            ...region,
+            districts,
+        };
+    }).sort((a, b) =>
+        (a.display_name || a.name_en || a.name || "").localeCompare(
+            b.display_name || b.name_en || b.name || ""
+        )
+    );
 });
 
 const allowDistrictSelection = (regionId) => {

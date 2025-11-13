@@ -280,8 +280,8 @@ class ErosionRasterGenerator:
 
         tile_width_deg = max_pixels * scale / meters_per_degree
         tile_height_deg = max_pixels * scale / meters_per_degree
-        tile_width_deg = max(tile_width_deg, width_deg)
-        tile_height_deg = max(tile_height_deg, height_deg)
+        tile_width_deg = min(tile_width_deg, width_deg)
+        tile_height_deg = min(tile_height_deg, height_deg)
 
         cols = max(1, math.ceil(width_deg / tile_width_deg))
         rows = max(1, math.ceil(height_deg / tile_height_deg))
