@@ -1333,7 +1333,6 @@ class GoogleEarthEngineService
         $payload = $this->attachConfigPayload($payload);
 
         $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", $payload);
-        ]);
         
         if (!$response->successful()) {
             $error = $response->json() ?? [];
