@@ -45,6 +45,11 @@ export const useDatasetStore = defineStore('dataset', () => {
             const response = await axios.get('/api/datasets')
             datasets.value = response.data.data || []
         } catch (err) {
+            if (err.response?.status === 401) {
+                // Endpoint is admin-only; ignore when user is not authenticated.
+                datasets.value = []
+                return
+            }
             error.value = err.response?.data?.message || 'Failed to fetch datasets'
             console.error('Error fetching datasets:', err)
         } finally {
@@ -60,6 +65,10 @@ export const useDatasetStore = defineStore('dataset', () => {
             const response = await axios.get('/api/datasets/available')
             datasets.value = response.data.data || []
         } catch (err) {
+            if (err.response?.status === 401) {
+                datasets.value = []
+                return
+            }
             error.value = err.response?.data?.message || 'Failed to fetch available datasets'
             console.error('Error fetching available datasets:', err)
         } finally {

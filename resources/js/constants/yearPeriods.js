@@ -1,5 +1,3 @@
-const CURRENT_YEAR = new Date().getFullYear()
-
 export const YEAR_PERIODS = [
   {
     id: '1993-2003',
@@ -20,10 +18,10 @@ export const YEAR_PERIODS = [
     endYear: 2023,
   },
   {
-    id: '2023-NOW',
-    label: `2023 - ${CURRENT_YEAR}`,
-    startYear: 2023,
-    endYear: CURRENT_YEAR,
+    id: '1993-2023',
+    label: '30-year Average (1993 - 2023)',
+    startYear: 1993,
+    endYear: 2023,
   },
 ]
 

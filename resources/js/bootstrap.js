@@ -23,15 +23,23 @@ window.axios.interceptors.response.use(
     response => response,
     error => {
         if (error.response?.status === 401) {
-            // Token expired or invalid
-            localStorage.removeItem('sanctum_token');
-            window.axios.defaults.headers.common['Authorization'] = '';
+            const requestUrl = error.config?.url ?? '';
+            const isAdminRequest =
+                requestUrl.includes('/api/admin') ||
+                window.location.pathname.startsWith('/admin');
 
-            // Redirect to login if not already there
-            if (!window.location.pathname.includes('/admin/login')) {
+            // Clear stored token if we had one
+            if (localStorage.getItem('sanctum_token')) {
+                localStorage.removeItem('sanctum_token');
+                window.axios.defaults.headers.common['Authorization'] = '';
+            }
+
+            if (isAdminRequest && !window.location.pathname.includes('/admin/login')) {
                 window.location.href = '/admin/login';
+                return Promise.reject(error);
             }
         }
+
         return Promise.reject(error);
     }
 );
