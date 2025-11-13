@@ -14,7 +14,7 @@
         </div>
         <p class="text-base text-white/80 leading-relaxed">
           Manage datasets, review system usage, and monitor erosion analytics in
-          Tajikistan. Authorized personnel only.
+          Tajikistan.
         </p>
       </div>
     </div>

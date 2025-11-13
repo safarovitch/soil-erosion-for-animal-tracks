@@ -11,6 +11,7 @@
             <h1 class="text-xl font-semibold text-gray-900">Usage History</h1>
           </div>
           <div class="flex items-center space-x-4">
+            <Link href="/admin/rusle-config" class="text-gray-600 hover:text-gray-900">RUSLE Config</Link>
             <Link href="/" class="text-gray-600 hover:text-gray-900">View Map</Link>
             <button
               @click="logout"

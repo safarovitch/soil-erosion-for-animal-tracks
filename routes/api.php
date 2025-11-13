@@ -143,4 +143,8 @@ Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(functi
     Route::get('/usage-history', [\App\Http\Controllers\Admin\AnalyticsController::class, 'getUsageHistory']);
     Route::post('/clear-cache', [\App\Http\Controllers\Admin\AnalyticsController::class, 'clearCache']);
     Route::get('/export-usage', [\App\Http\Controllers\Admin\AnalyticsController::class, 'exportUsage']);
+
+    // RUSLE configuration management
+    Route::get('/rusle/config', [\App\Http\Controllers\Admin\RusleConfigController::class, 'show']);
+    Route::post('/rusle/config', [\App\Http\Controllers\Admin\RusleConfigController::class, 'update']);
 });

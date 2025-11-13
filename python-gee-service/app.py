@@ -8,8 +8,9 @@ import logging
 import ee
 from config import Config
 from gee_service import gee_service
-from rusle_calculator import rusle_calculator
-from rainfall_calculator import rainfall_calculator
+from rusle_config import build_config
+from rusle_calculator import RUSLECalculator
+from rainfall_calculator import RainfallCalculator
 
 # Import tasks for precomputation
 try:
@@ -25,6 +26,17 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+DEFAULT_RUSLE_CONFIG = build_config()
+DEFAULT_RUSLE_CALCULATOR = RUSLECalculator(DEFAULT_RUSLE_CONFIG)
+DEFAULT_RAINFALL_CALCULATOR = RainfallCalculator(DEFAULT_RUSLE_CONFIG)
+
+
+def resolve_calculators(config_overrides=None):
+    if config_overrides:
+        config = build_config(config_overrides)
+        return RUSLECalculator(config), RainfallCalculator(config), config
+    return DEFAULT_RUSLE_CALCULATOR, DEFAULT_RAINFALL_CALCULATOR, DEFAULT_RUSLE_CONFIG
 
 # Create Flask app
 app = Flask(__name__)
@@ -96,22 +108,29 @@ def compute_rusle():
                 'error': 'end_year must be greater than or equal to start_year'
             }), 400
         
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        user_id = data.get('user_id')
+        defaults_version = data.get('defaults_version')
+        user_id = data.get('user_id')
+        defaults_version = data.get('defaults_version')
+        rusle_calc, _, rusle_config = resolve_calculators(config_overrides)
+
         # Convert GeoJSON to EE Geometry
         geometry = gee_service.geometry_from_geojson(area_geometry)
         
         # Compute RUSLE for the requested period
         if end_year != start_year:
-            r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
-            result = rusle_calculator.compute_rusle(
+            r_factor = rusle_calc.compute_r_factor_range(start_year, end_year, geometry)
+            result = rusle_calc.compute_rusle(
                 start_year,
                 geometry,
                 r_factor_image=r_factor
             )
         else:
-            result = rusle_calculator.compute_rusle(start_year, geometry)
+            result = rusle_calc.compute_rusle(start_year, geometry)
         
-        rainfall_stats = rusle_calculator.compute_rainfall_statistics(start_year, end_year, geometry)
-        erosion_classes = rusle_calculator.compute_erosion_class_breakdown(
+        rainfall_stats = rusle_calc.compute_rainfall_statistics(start_year, end_year, geometry)
+        erosion_classes = rusle_calc.compute_erosion_class_breakdown(
             result['image'],
             geometry,
             scale=100
@@ -119,7 +138,7 @@ def compute_rusle():
         
         period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
 
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': {
                 'statistics': result['statistics'],
@@ -133,7 +152,13 @@ def compute_rusle():
                     'label': period_label
                 }
             }
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_calc.include_config_snapshot:
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -178,6 +203,8 @@ def compute_rusle_factors():
         start_year = int(start_year)
         end_year = int(end_year) if end_year is not None else start_year
         requested_factors = data.get('factors', 'all')  # 'all' or list like ['r','k','ls']
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        rusle_calc, _, rusle_config = resolve_calculators(config_overrides)
         
         # Validate year range
         if start_year < Config.RUSLE_START_YEAR or end_year > Config.RUSLE_END_YEAR:
@@ -219,9 +246,9 @@ def compute_rusle_factors():
         if 'r' in factors_to_compute:
             logger.info("Computing R-factor...")
             if end_year != start_year:
-                r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
+                r_factor = rusle_calc.compute_r_factor_range(start_year, end_year, geometry)
             else:
-                r_factor = rusle_calculator.compute_r_factor(start_year, geometry)
+                r_factor = rusle_calc.compute_r_factor(start_year, geometry)
             r_stats = gee_service.compute_statistics(r_factor, geometry, scale=scale)
             # Handle None values - don't use defaults, raise error if data is missing
             r_mean = r_stats.get('R_factor_mean')
@@ -243,7 +270,7 @@ def compute_rusle_factors():
         
         if 'k' in factors_to_compute:
             logger.info("Computing K-factor...")
-            k_factor = rusle_calculator.compute_k_factor()
+            k_factor = rusle_calc.compute_k_factor()
             k_stats = gee_service.compute_statistics(k_factor, geometry, scale=scale)
             k_mean = k_stats.get('K_factor_mean')
             k_min = k_stats.get('K_factor_min')
@@ -264,7 +291,7 @@ def compute_rusle_factors():
         
         if 'ls' in factors_to_compute:
             logger.info("Computing LS-factor...")
-            ls_factor = rusle_calculator.compute_ls_factor()
+            ls_factor = rusle_calc.compute_ls_factor()
             ls_stats = gee_service.compute_statistics(ls_factor, geometry, scale=scale)
             ls_mean = ls_stats.get('LS_factor_mean')
             ls_min = ls_stats.get('LS_factor_min')
@@ -285,7 +312,7 @@ def compute_rusle_factors():
         
         if 'c' in factors_to_compute:
             logger.info("Computing C-factor...")
-            c_factor = rusle_calculator.compute_c_factor(end_year, geometry)
+            c_factor = rusle_calc.compute_c_factor(end_year, geometry)
             c_stats = gee_service.compute_statistics(c_factor, geometry, scale=scale)
             c_mean = c_stats.get('C_factor_mean')
             c_min = c_stats.get('C_factor_min')
@@ -306,7 +333,7 @@ def compute_rusle_factors():
         
         if 'p' in factors_to_compute:
             logger.info("Computing P-factor...")
-            p_factor = rusle_calculator.compute_p_factor(end_year, geometry)
+            p_factor = rusle_calc.compute_p_factor(end_year, geometry)
             p_stats = gee_service.compute_statistics(p_factor, geometry, scale=scale)
             p_mean = p_stats.get('P_factor_mean')
             p_min = p_stats.get('P_factor_min')
@@ -330,8 +357,8 @@ def compute_rusle_factors():
         if set(factors_to_compute) == set(valid_factors):
             logger.info("Computing final soil erosion (A = R × K × LS × C × P)...")
             if end_year != start_year:
-                r_factor = rusle_calculator.compute_r_factor_range(start_year, end_year, geometry)
-                rusle_result = rusle_calculator.compute_rusle(
+                r_factor = rusle_calc.compute_r_factor_range(start_year, end_year, geometry)
+                rusle_result = rusle_calc.compute_rusle(
                     start_year,
                     geometry,
                     scale=scale,
@@ -339,24 +366,20 @@ def compute_rusle_factors():
                     r_factor_image=r_factor
                 )
             else:
-                rusle_result = rusle_calculator.compute_rusle(start_year, geometry, scale=scale, compute_stats=True)
+                rusle_result = rusle_calc.compute_rusle(start_year, geometry, scale=scale, compute_stats=True)
 
             soil_erosion = rusle_result['statistics']
 
             if soil_erosion:
                 try:
-                    breakdown = rusle_calculator.compute_erosion_class_breakdown(
+                    breakdown = rusle_calc.compute_erosion_class_breakdown(
                         rusle_result['image'],
                         geometry,
                         scale=scale
                     )
 
                     class_labels = [
-                        ('very_low', 'Very Low'),
-                        ('low', 'Low'),
-                        ('moderate', 'Moderate'),
-                        ('severe', 'Severe'),
-                        ('excessive', 'Excessive'),
+                        (cls['key'], cls['label']) for cls in rusle_calc.erosion_classes
                     ]
 
                     severity_distribution = []
@@ -386,7 +409,7 @@ def compute_rusle_factors():
  
         period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
 
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': {
                 'factors': factors_result,
@@ -400,7 +423,13 @@ def compute_rusle_factors():
                 },
                 'scale': scale
             }
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_calc.include_config_snapshot:
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -436,6 +465,8 @@ def compute_detailed_grid():
         year = int(data['year'])
         grid_size = int(data.get('grid_size', Config.DEFAULT_GRID_SIZE))
         bbox = data.get('bbox', None)  # Optional pre-calculated bbox
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        rusle_calc, _, rusle_config = resolve_calculators(config_overrides)
         
         # Validate parameters
         if year < Config.RUSLE_START_YEAR or year > Config.RUSLE_END_YEAR:
@@ -458,7 +489,7 @@ def compute_detailed_grid():
             logger.info(f"Using pre-calculated bbox: {bbox}")
         
         # Compute detailed grid with optional bbox and geojson for complexity analysis
-        result = rusle_calculator.compute_detailed_grid(
+        result = rusle_calc.compute_detailed_grid(
             year, 
             geometry, 
             grid_size, 
@@ -466,10 +497,16 @@ def compute_detailed_grid():
             geojson=area_geometry  # Pass original GeoJSON for complexity analysis
         )
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': result
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_calc.include_config_snapshot:
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -504,6 +541,8 @@ def compute_time_series():
         area_geometry = data['area_geometry']
         start_year = int(data.get('start_year', Config.RUSLE_START_YEAR))
         end_year = int(data.get('end_year', Config.RUSLE_END_YEAR))
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        rusle_calc, _, rusle_config = resolve_calculators(config_overrides)
         
         # Validate year range
         if start_year < Config.RUSLE_START_YEAR or end_year > Config.RUSLE_END_YEAR:
@@ -524,20 +563,26 @@ def compute_time_series():
         # Compute time series
         yearly_data = []
         for year in range(start_year, end_year + 1):
-            result = rusle_calculator.compute_rusle(year, geometry)
+            result = rusle_calc.compute_rusle(year, geometry)
             yearly_data.append({
                 'year': year,
                 'statistics': result['statistics']
             })
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': {
                 'yearly_data': yearly_data,
                 'start_year': start_year,
                 'end_year': end_year
             }
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_calc.include_config_snapshot:
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -685,6 +730,7 @@ def trigger_precompute():
         end_year = data.get('end_year') if data.get('end_year') is not None else start_year
         geometry = data.get('area_geometry')
         bbox = data.get('bbox')
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
         
         if start_year is None:
             return jsonify({
@@ -725,17 +771,27 @@ def trigger_precompute():
             start_year,
             geometry,
             bbox,
-            end_year  # Pass as positional argument (6th parameter)
+            end_year,  # Pass as positional argument (6th parameter)
+            config_overrides=config_overrides,
+            user_id=user_id,
+            defaults_version=defaults_version
         )
         
         logger.info(f"Task queued with ID: {task.id}")
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'task_id': task.id,
             'status': 'queued',
             'message': f'Precomputation queued for {area_type} {area_id}, period {period_label}'
-        }), 202
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if user_id is not None:
+            response_payload['user_id'] = user_id
+        if defaults_version is not None:
+            response_payload['defaults_version'] = defaults_version
+        return jsonify(response_payload), 202
         
     except Exception as e:
         logger.error(f"Failed to queue precomputation: {str(e)}", exc_info=True)
@@ -838,6 +894,10 @@ def rainfall_slope():
         geometry_json = data['area_geometry']
         start_year = int(data['start_year'])
         end_year = int(data['end_year'])
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        _, rainfall_calc, rusle_config = resolve_calculators(config_overrides)
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        _, rainfall_calc, rusle_config = resolve_calculators(config_overrides)
         
         logger.info(f"Computing rainfall slope: {start_year}-{end_year}")
         
@@ -845,16 +905,22 @@ def rainfall_slope():
         geometry = gee_service.geometry_from_geojson(geometry_json)
         
         # Compute rainfall slope
-        result = rainfall_calculator.compute_rainfall_slope(
+        result = rainfall_calc.compute_rainfall_slope(
             geometry,
             start_year,
             end_year
         )
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': result
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_config.get("logging.include_config_snapshot", True):
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -907,16 +973,22 @@ def rainfall_cv():
         geometry = gee_service.geometry_from_geojson(geometry_json)
         
         # Compute rainfall CV
-        result = rainfall_calculator.compute_rainfall_cv(
+        result = rainfall_calc.compute_rainfall_cv(
             geometry,
             start_year,
             end_year
         )
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': result
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_config.get("logging.include_config_snapshot", True):
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -964,6 +1036,10 @@ def rainfall_slope_grid():
         start_year = int(data['start_year'])
         end_year = int(data['end_year'])
         grid_size = int(data.get('grid_size', 50))
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        _, rainfall_calc, rusle_config = resolve_calculators(config_overrides)
+        config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        _, rainfall_calc, rusle_config = resolve_calculators(config_overrides)
         
         logger.info(f"Computing rainfall slope grid: {start_year}-{end_year}, grid_size={grid_size}")
         
@@ -971,17 +1047,23 @@ def rainfall_slope_grid():
         geometry = gee_service.geometry_from_geojson(geometry_json)
         
         # Compute rainfall slope grid
-        result = rainfall_calculator.compute_rainfall_slope_grid(
+        result = rainfall_calc.compute_rainfall_slope_grid(
             geometry,
             start_year,
             end_year,
             grid_size=grid_size
         )
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': result
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_config.get("logging.include_config_snapshot", True):
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")
@@ -1036,17 +1118,23 @@ def rainfall_cv_grid():
         geometry = gee_service.geometry_from_geojson(geometry_json)
         
         # Compute rainfall CV grid
-        result = rainfall_calculator.compute_rainfall_cv_grid(
+        result = rainfall_calc.compute_rainfall_cv_grid(
             geometry,
             start_year,
             end_year,
             grid_size=grid_size
         )
         
-        return jsonify({
+        response_payload = {
             'success': True,
             'data': result
-        }), 200
+        }
+        if config_overrides:
+            response_payload['config_overrides'] = config_overrides
+        if rusle_config.get("logging.include_config_snapshot", True):
+            response_payload['rusle_config'] = rusle_config.to_dict()
+
+        return jsonify(response_payload), 200
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")

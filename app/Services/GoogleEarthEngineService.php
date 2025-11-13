@@ -7,9 +7,11 @@ use App\Models\Region;
 use App\Models\District;
 use App\Models\PrecomputedErosionMap;
 use App\Exceptions\GoogleEarthEngineException;
+use App\Models\User;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Cache;
 use Exception;
 
 class GoogleEarthEngineService
@@ -20,15 +22,64 @@ class GoogleEarthEngineService
     private string $projectId;
     private ?string $accessToken = null;
     private bool $isConfigured = false;
+    private RusleConfigService $configService;
 
-    public function __construct()
+    public function __construct(RusleConfigService $configService)
     {
+        $this->configService = $configService;
         $this->serviceAccountEmail = config('earthengine.service_account_email');
         $this->privateKeyPath = config('earthengine.private_key_path');
         $this->projectId = config('earthengine.project_id');
 
         // Check if GEE is properly configured
         $this->isConfigured = $this->checkConfiguration();
+    }
+
+    private function buildConfigRequestPayload(?User $user = null): array
+    {
+        $user = $user ?? Auth::user();
+        $defaultsVersion = $this->configService->getDefaultsVersion();
+
+        if (!$user || !method_exists($user, 'isAdmin') || !$user->isAdmin()) {
+            return [
+                'overrides' => null,
+                'user_id' => null,
+                'defaults_version' => $defaultsVersion,
+            ];
+        }
+
+        $configModel = $this->configService->getUserConfig($user);
+        $sanitised = $this->configService->filterOverrides($configModel->overrides ?? []);
+
+        if (empty($sanitised)) {
+            return [
+                'overrides' => null,
+                'user_id' => null,
+                'defaults_version' => $defaultsVersion,
+            ];
+        }
+
+        return [
+            'overrides' => $sanitised,
+            'user_id' => $user->id,
+            'defaults_version' => $configModel->defaults_version ?? $defaultsVersion,
+        ];
+    }
+
+    private function attachConfigPayload(array $payload, ?User $user = null): array
+    {
+        $config = $this->buildConfigRequestPayload($user);
+
+        if (!empty($config['overrides'])) {
+            $payload['config_overrides'] = $config['overrides'];
+            $payload['user_id'] = $config['user_id'];
+        }
+
+        if (!empty($config['defaults_version'])) {
+            $payload['defaults_version'] = $config['defaults_version'];
+        }
+
+        return $payload;
     }
 
     /**
@@ -211,14 +262,18 @@ class GoogleEarthEngineService
         ]);
 
         // Get all factors and soil erosion from Python service
-        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
+        $payload = [
             'area_geometry' => $geometry,
             'year' => $endYear, // Legacy compatibility
             'start_year' => $startYear,
             'end_year' => $endYear,
             'factors' => 'all',
             'scale' => 100,
-        ]);
+        ];
+
+        $payload = $this->attachConfigPayload($payload);
+
+        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", $payload);
 
         if (!$response->successful()) {
             $error = $response->json() ?? [];
@@ -778,12 +833,16 @@ class GoogleEarthEngineService
             $pythonServiceUrl = config('app.python_gee_service_url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
             
             // Call Python GEE service
-            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/compute", [
+            $computePayload = [
                 'area_geometry' => $geometry,
                 'year' => $endYear,
                 'start_year' => $startYear,
                 'end_year' => $endYear
-            ]);
+            ];
+
+            $computePayload = $this->attachConfigPayload($computePayload);
+            
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/compute", $computePayload);
             
             if (!$response->successful()) {
                 $error = $response->json() ?? [];
@@ -814,14 +873,18 @@ class GoogleEarthEngineService
             $tempArea->name_en = 'Custom Area';
             
             // Get individual factors from Python service
-            $factorsResponse = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
+            $factorsPayload = [
                 'area_geometry' => $geometry,
                 'year' => $endYear,
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'factors' => 'all',
                 'scale' => 100
-            ]);
+            ];
+
+            $factorsPayload = $this->attachConfigPayload($factorsPayload);
+            
+            $factorsResponse = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", $factorsPayload);
             
             $factorsData = null;
             if ($factorsResponse->successful()) {
@@ -968,11 +1031,15 @@ class GoogleEarthEngineService
             ]);
             
             // Call Python GEE service
-            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope", [
+            $payload = [
                 'area_geometry' => $geometry,
                 'start_year' => $startYear,
                 'end_year' => $endYear
-            ]);
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope", $payload);
             
             if (!$response->successful()) {
                 $error = $response->json() ?? [];
@@ -1047,11 +1114,15 @@ class GoogleEarthEngineService
             ]);
             
             // Call Python GEE service
-            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv", [
+            $payload = [
                 'area_geometry' => $geometry,
                 'start_year' => $startYear,
                 'end_year' => $endYear
-            ]);
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv", $payload);
             
             if (!$response->successful()) {
                 $error = $response->json() ?? [];
@@ -1121,12 +1192,16 @@ class GoogleEarthEngineService
                 'end_year' => $endYear,
             ]);
             
-            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv-grid", [
+            $payload = [
                 'area_geometry' => $geometry,
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'grid_size' => 50
-            ]);
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv-grid", $payload);
             
             if (!$response->successful()) {
                 $error = $response->json() ?? [];
@@ -1172,12 +1247,16 @@ class GoogleEarthEngineService
                 'end_year' => $endYear,
             ]);
             
-            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope-grid", [
+            $payload = [
                 'area_geometry' => $geometry,
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'grid_size' => 50
-            ]);
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+            
+            $response = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope-grid", $payload);
             
             if (!$response->successful()) {
                 $error = $response->json() ?? [];
@@ -1244,11 +1323,16 @@ class GoogleEarthEngineService
         ]);
         
         // Call Python service for specific factor
-        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", [
+        $payload = [
             'area_geometry' => $geometry,
             'year' => $year,
             'factors' => [$factorKey],  // Request only the specific factor
             'scale' => 100
+        ];
+
+        $payload = $this->attachConfigPayload($payload);
+
+        $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", $payload);
         ]);
         
         if (!$response->successful()) {
@@ -1347,12 +1431,16 @@ class GoogleEarthEngineService
             ]);
 
             // Call Python GEE service with pre-calculated bbox
-            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/detailed-grid", [
+            $payload = [
                 'area_geometry' => $geometry,
                 'year' => $year,
                 'grid_size' => $gridSize,
                 'bbox' => $bbox  // Send pre-calculated bbox to skip GEE bbox calculation
-            ]);
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/detailed-grid", $payload);
             
             Log::info('Received response from Python service', [
                 'status' => $response->status(),

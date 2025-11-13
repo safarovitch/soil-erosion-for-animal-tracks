@@ -4,12 +4,14 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PrecomputedErosionMap extends Model
 {
     protected $fillable = [
         'area_type',
         'area_id',
+        'user_id',
         'year',
         'status',
         'geotiff_path',
@@ -17,7 +19,9 @@ class PrecomputedErosionMap extends Model
         'statistics',
         'metadata',
         'computed_at',
-        'error_message'
+        'error_message',
+        'config_hash',
+        'config_snapshot',
     ];
 
     protected $casts = [
@@ -25,7 +29,9 @@ class PrecomputedErosionMap extends Model
         'metadata' => 'array',
         'computed_at' => 'datetime',
         'year' => 'integer',
-        'area_id' => 'integer'
+        'area_id' => 'integer',
+        'user_id' => 'integer',
+        'config_snapshot' => 'array',
     ];
 
     protected $appends = [
@@ -59,6 +65,11 @@ class PrecomputedErosionMap extends Model
         }
     }
 
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
     /**
      * Scope: only completed maps
      */
@@ -90,6 +101,12 @@ class PrecomputedErosionMap extends Model
     {
         return $query->where('area_type', $areaType)
                     ->where('area_id', $areaId);
+    }
+
+    public function scopeForConfig($query, ?int $userId, string $configHash)
+    {
+        return $query->where('user_id', $userId)
+            ->where('config_hash', $configHash);
     }
 
     /**

@@ -5,15 +5,112 @@ Uses CHIRPS precipitation data from Google Earth Engine
 import ee
 import logging
 import numpy as np
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
 from gee_service import gee_service
+from rusle_config import RUSLEConfig, build_config
 
 logger = logging.getLogger(__name__)
 
 class RainfallCalculator:
     """Calculate rainfall trends and variability metrics"""
     
-    def __init__(self):
-        pass
+    def __init__(self, config: Optional[Mapping[str, Any]] = None):
+        if isinstance(config, RUSLEConfig):
+            self.config = config
+        else:
+            self.config = build_config(config)
+        self.rainfall_mean_scale = float(
+            self.config.get("rainfall_statistics.mean_scale", 5000)
+        )
+        self.trend_rules = self._prepare_trend_rules(
+            self.config.get("rainfall_statistics.trend_interpretation", [])
+        )
+        self.cv_rules = self._prepare_cv_rules(
+            self.config.get("rainfall_statistics.cv_interpretation", [])
+        )
+
+    def config_snapshot(self) -> Dict[str, Any]:
+        return self.config.to_dict()
+
+    def _prepare_trend_rules(
+        self, rules: Optional[Sequence[Mapping[str, Any]]]
+    ) -> Sequence[Dict[str, Any]]:
+        default_rules = [
+            {"min": 2.0, "label": "Significant increasing trend"},
+            {"min": 0.5, "label": "Moderate increasing trend"},
+            {"min": -0.5, "label": "Stable/No significant trend"},
+            {"min": -2.0, "label": "Moderate decreasing trend"},
+            {"min": None, "label": "Significant decreasing trend"},
+        ]
+        processed: List[Dict[str, Any]] = []
+        if rules:
+            for entry in rules:
+                label = entry.get("label")
+                if label is None:
+                    continue
+                min_value = entry.get("min")
+                if min_value is None:
+                    processed.append({"min": None, "label": str(label)})
+                else:
+                    try:
+                        processed.append({"min": float(min_value), "label": str(label)})
+                    except (TypeError, ValueError):
+                        continue
+        if not processed:
+            processed = list(default_rules)
+        processed.sort(
+            key=lambda item: float("-inf")
+            if item["min"] is None
+            else item["min"],
+            reverse=True,
+        )
+        return processed
+
+    def _prepare_cv_rules(
+        self, rules: Optional[Sequence[Mapping[str, Any]]]
+    ) -> Sequence[Dict[str, Any]]:
+        default_rules = [
+            {"max": 10.0, "label": "Very low variability"},
+            {"max": 20.0, "label": "Low variability"},
+            {"max": 30.0, "label": "Moderate variability"},
+            {"max": 40.0, "label": "High variability"},
+            {"max": None, "label": "Very high variability"},
+        ]
+        processed: List[Dict[str, Any]] = []
+        if rules:
+            for entry in rules:
+                label = entry.get("label")
+                if label is None:
+                    continue
+                max_value = entry.get("max")
+                if max_value is None:
+                    processed.append({"max": None, "label": str(label)})
+                else:
+                    try:
+                        processed.append({"max": float(max_value), "label": str(label)})
+                    except (TypeError, ValueError):
+                        continue
+        if not processed:
+            processed = list(default_rules)
+        processed.sort(
+            key=lambda item: float("inf") if item["max"] is None else item["max"]
+        )
+        return processed
+
+    def _interpret_trend(self, value: float) -> str:
+        for rule in self.trend_rules:
+            threshold = rule["min"]
+            if threshold is None or value >= threshold:
+                return rule["label"]
+        return self.trend_rules[-1]["label"]
+
+    def _interpret_cv_value(self, value: float) -> str:
+        for rule in self.cv_rules:
+            threshold = rule["max"]
+            if threshold is None or value < threshold:
+                return rule["label"]
+        return self.cv_rules[-1]["label"]
     
     def compute_rainfall_slope(self, geometry, start_year, end_year):
         """
@@ -79,7 +176,9 @@ class RainfallCalculator:
             
             # Compute statistics over the geometry
             logger.info("Computing statistics over region...")
-            stats = gee_service.compute_statistics(slope_image, geometry, scale=5000)
+            stats = gee_service.compute_statistics(
+                slope_image, geometry, scale=self.rainfall_mean_scale
+            )
             
             # Extract values
             mean_slope = stats.get('scale_mean', 0)
@@ -96,7 +195,8 @@ class RainfallCalculator:
                 'start_year': start_year,
                 'end_year': end_year,
                 'unit': 'mm/year per year',
-                'interpretation': self._interpret_slope(float(mean_slope))
+                'interpretation': self._interpret_trend(float(mean_slope)),
+                'analysis_scale_m': self.rainfall_mean_scale,
             }
             
             logger.info(f"Rainfall slope: {mean_slope:.4f} mm/year per year")
@@ -159,7 +259,9 @@ class RainfallCalculator:
             
             # Compute statistics over the geometry
             logger.info("Computing statistics over region...")
-            stats = gee_service.compute_statistics(cv_image, geometry, scale=5000)
+            stats = gee_service.compute_statistics(
+                cv_image, geometry, scale=self.rainfall_mean_scale
+            )
             
             # Extract values
             mean_cv = stats.get('cv_mean', 0)
@@ -176,7 +278,8 @@ class RainfallCalculator:
                 'start_year': start_year,
                 'end_year': end_year,
                 'unit': 'percent (%)',
-                'interpretation': self._interpret_cv(float(mean_cv))
+                'interpretation': self._interpret_cv_value(float(mean_cv)),
+                'analysis_scale_m': self.rainfall_mean_scale,
             }
             
             logger.info(f"Rainfall CV: {mean_cv:.2f}%")

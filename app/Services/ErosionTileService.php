@@ -5,16 +5,21 @@ namespace App\Services;
 use App\Models\Region;
 use App\Models\District;
 use App\Models\PrecomputedErosionMap;
+use App\Models\User;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Services\RusleConfigService;
+use Illuminate\Support\Arr;
 
 class ErosionTileService
 {
     private string $pythonServiceUrl;
+    private RusleConfigService $configService;
 
-    public function __construct()
+    public function __construct(RusleConfigService $configService)
     {
         $this->pythonServiceUrl = config('services.gee.url', 'http://localhost:5000');
+        $this->configService = $configService;
     }
 
     /**
@@ -26,17 +31,25 @@ class ErosionTileService
      * @param int|null $endYear Inclusive end year (defaults to start year)
      * @return array Status and information about the map
      */
-    public function getOrQueueMap(string $areaType, int $areaId, int $startYear, ?int $endYear = null): array
+    public function getOrQueueMap(string $areaType, int $areaId, int $startYear, ?int $endYear = null, ?User $user = null): array
     {
         $startYear = (int) $startYear;
         $endYear = (int) ($endYear ?? $startYear);
         $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
 
+        $configContext = $this->resolveConfigContext($user);
+        $userId = $configContext['user_id'];
+        $configHash = $configContext['hash'];
+        $overrides = $configContext['overrides'];
+        $configSnapshot = $configContext['snapshot'];
+
         // Check if already precomputed
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $startYear
+            'year' => $startYear,
+            'user_id' => $userId,
+            'config_hash' => $configHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -76,17 +89,17 @@ class ErosionTileService
         if ($map && $map->status === 'failed') {
             // Retry failed computation
             Log::info("Retrying failed computation for {$areaType} {$areaId}, period {$periodLabel}");
-            return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $map);
+            return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext, $map);
         }
 
         // Queue new computation
-        return $this->queueComputation($areaType, $areaId, $startYear, $endYear);
+        return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext);
     }
 
     /**
      * Queue a new computation task
      */
-    private function queueComputation(string $areaType, int $areaId, int $startYear, int $endYear, ?PrecomputedErosionMap $existingMap = null): array
+    private function queueComputation(string $areaType, int $areaId, int $startYear, int $endYear, array $configContext, ?PrecomputedErosionMap $existingMap = null): array
     {
         $startYear = (int) $startYear;
         $endYear = (int) $endYear;
@@ -113,17 +126,37 @@ class ErosionTileService
             $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
             Log::info("Queueing computation for {$areaType} {$areaId}, period {$periodLabel}");
 
+            $userId = $configContext['user_id'];
+            $configHash = $configContext['hash'];
+            $overrides = $configContext['overrides'];
+            $configSnapshot = $configContext['snapshot'];
+            $defaultsVersion = $configContext['version'];
+
             // Call Python service to queue task
+            $payload = [
+                'area_type' => $areaType,
+                'area_id' => $areaId,
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'area_geometry' => $geometry,
+                'bbox' => $bbox,
+            ];
+
+            if ($userId !== null) {
+                $payload['user_id'] = $userId;
+            }
+
+            if (!empty($overrides)) {
+                $payload['config_overrides'] = $overrides;
+            }
+
+            if ($defaultsVersion) {
+                $payload['defaults_version'] = $defaultsVersion;
+            }
+
             $response = Http::timeout(30)->post(
                 "{$this->pythonServiceUrl}/api/rusle/precompute",
-                [
-                    'area_type' => $areaType,
-                    'area_id' => $areaId,
-                    'start_year' => $startYear,
-                    'end_year' => $endYear,
-                    'area_geometry' => $geometry,
-                    'bbox' => $bbox
-                ]
+                $payload
             );
 
             if (!$response->successful()) {
@@ -147,6 +180,12 @@ class ErosionTileService
                     'end_year' => $endYear,
                     'label' => $periodLabel,
                 ],
+                'config' => [
+                    'hash' => $configHash,
+                    'overrides' => $overrides,
+                    'defaults_version' => $defaultsVersion,
+                ],
+                'user_id' => $userId,
             ];
 
             // If we have an existing map, merge its existing metadata
@@ -159,11 +198,14 @@ class ErosionTileService
                     'area_type' => $areaType,
                     'area_id' => $areaId,
                     'year' => $startYear,
+                    'user_id' => $userId,
+                    'config_hash' => $configHash,
                 ],
                 [
                     'status' => 'queued',
                     'metadata' => $metadata,
-                    'error_message' => null
+                    'error_message' => null,
+                    'config_snapshot' => $configSnapshot,
                 ]
             );
 
@@ -256,6 +298,120 @@ class ErosionTileService
         return $statistics;
     }
 
+    private function resolveConfigContext(?User $user): array
+    {
+        $defaultsVersion = $this->configService->getDefaultsVersion();
+
+        if (!$user || $user->role !== 'admin') {
+            return [
+                'user_id' => null,
+                'overrides' => [],
+                'snapshot' => null,
+                'hash' => $this->computeConfigHash(null, $defaultsVersion),
+                'version' => $defaultsVersion,
+            ];
+        }
+
+        $configModel = $this->configService->getUserConfig($user);
+        $rawOverrides = $configModel->overrides ?? [];
+        $filteredOverrides = $this->configService->filterOverrides($rawOverrides);
+
+        if (empty($filteredOverrides)) {
+            return [
+                'user_id' => null,
+                'overrides' => [],
+                'snapshot' => null,
+                'hash' => $this->computeConfigHash(null, $defaultsVersion),
+                'version' => $defaultsVersion,
+            ];
+        }
+
+        $normalisedOverrides = $this->normaliseOverrides($filteredOverrides);
+        $effective = $configModel->effective($this->configService->getDefaults());
+
+        return [
+            'user_id' => $user->id,
+            'overrides' => $normalisedOverrides,
+            'snapshot' => $effective,
+            'hash' => $this->computeConfigHash($normalisedOverrides, $defaultsVersion),
+            'version' => $configModel->defaults_version ?? $defaultsVersion,
+        ];
+    }
+
+    private function computeConfigHash(?array $overrides, ?string $version): string
+    {
+        if (empty($overrides)) {
+            return 'default';
+        }
+
+        $payload = [
+            'version' => $version ?? 'default',
+            'overrides' => $overrides,
+        ];
+
+        return hash('sha256', json_encode($payload, JSON_PRESERVE_ZERO_FRACTION));
+    }
+
+    private function normaliseOverrides(array $value): array
+    {
+        foreach ($value as $key => $child) {
+            if (is_array($child)) {
+                $value[$key] = $this->normaliseOverrides($child);
+            }
+        }
+
+        if ($this->isAssoc($value)) {
+            ksort($value);
+        } else {
+            $normalised = [];
+            foreach ($value as $child) {
+                $normalised[] = is_array($child) ? $this->normaliseOverrides($child) : $child;
+            }
+            $value = $normalised;
+        }
+
+        return $value;
+    }
+
+    private function isAssoc(array $value): bool
+    {
+        return array_keys($value) !== range(0, count($value) - 1);
+    }
+
+    private function configContextFromPayload(array $data): array
+    {
+        $defaultsVersion = Arr::get($data, 'defaults_version')
+            ?? Arr::get($data, 'metadata.config.defaults_version')
+            ?? $this->configService->getDefaultsVersion();
+
+        $overrides = Arr::get($data, 'config_overrides', Arr::get($data, 'metadata.config.overrides', []));
+        $overrides = is_array($overrides) ? $this->configService->filterOverrides($overrides) : [];
+
+        $snapshot = Arr::get($data, 'rusle_config', Arr::get($data, 'metadata.rusle_config'));
+
+        $userId = Arr::get($data, 'user_id', Arr::get($data, 'metadata.user_id'));
+
+        if (empty($overrides)) {
+            return [
+                'user_id' => null,
+                'overrides' => [],
+                'snapshot' => $snapshot,
+                'hash' => $this->computeConfigHash(null, $defaultsVersion),
+                'version' => $defaultsVersion,
+            ];
+        }
+
+        $normalised = $this->normaliseOverrides($overrides);
+
+        return [
+            'user_id' => $userId,
+            'overrides' => $normalised,
+            'snapshot' => $snapshot,
+            'hash' => $this->computeConfigHash($normalised, $defaultsVersion),
+            'version' => $defaultsVersion,
+        ];
+    }
+
     /**
      * Calculate bounding box from GeoJSON geometry
      */
@@ -343,10 +499,16 @@ class ErosionTileService
         }
 
         // Find and update the map record
+        $configContext = $this->configContextFromPayload($data);
+        $userId = $configContext['user_id'];
+        $configHash = $configContext['hash'];
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $startYear
+            'year' => $startYear,
+            'user_id' => $userId,
+            'config_hash' => $configHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -357,7 +519,17 @@ class ErosionTileService
 
         if ($map) {
             $map->update([
-                'status' => 'processing'
+                'status' => 'processing',
+                'config_hash' => $configHash,
+                'config_snapshot' => $configContext['snapshot'] ?? $map->config_snapshot,
+                'metadata' => array_merge($map->metadata ?? [], [
+                    'config' => [
+                        'hash' => $configHash,
+                        'overrides' => $configContext['overrides'],
+                        'defaults_version' => $configContext['version'],
+                    ],
+                    'user_id' => $userId,
+                ]),
             ]);
             
             Log::info("Map status updated to processing: {$areaType} {$areaId}, period {$periodLabel}");
@@ -390,10 +562,17 @@ class ErosionTileService
         }
 
         // Find the map record
+        $configContext = $this->configContextFromPayload($data);
+        $userId = $configContext['user_id'];
+        $configHash = $configContext['hash'];
+        $configSnapshot = $configContext['snapshot'];
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $startYear
+            'year' => $startYear,
+            'user_id' => $userId,
+            'config_hash' => $configHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -412,6 +591,12 @@ class ErosionTileService
                 'end_year' => $endYear,
                 'label' => $periodLabel,
             ],
+            'config' => [
+                'hash' => $configHash,
+                'overrides' => $configContext['overrides'],
+                'defaults_version' => $configContext['version'],
+            ],
+            'user_id' => $userId,
         ];
 
         if ($map) {
@@ -432,7 +617,10 @@ class ErosionTileService
                 'statistics' => $statistics,
                 'metadata' => $updatedMetadata,
                 'computed_at' => now(),
-                'error_message' => null
+                'error_message' => null,
+                'user_id' => $userId,
+                'config_hash' => $configHash,
+                'config_snapshot' => $configSnapshot ?? Arr::get($updatedMetadata, 'rusle_config'),
             ]);
             
             Log::info("Map updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
@@ -443,6 +631,8 @@ class ErosionTileService
                     'area_type' => $areaType,
                     'area_id' => $areaId,
                     'year' => $startYear,
+                    'user_id' => $userId,
+                    'config_hash' => $configHash,
                 ],
                 [
                     'status' => 'completed',
@@ -455,7 +645,8 @@ class ErosionTileService
                         $components !== null ? ['components' => $components] : []
                     ),
                     'computed_at' => now(),
-                    'error_message' => null
+                    'error_message' => null,
+                    'config_snapshot' => $configSnapshot ?? Arr::get($data, 'metadata.rusle_config'),
                 ]
             );
             
@@ -490,10 +681,16 @@ class ErosionTileService
         }
 
         // Find the map record
+        $configContext = $this->configContextFromPayload($data);
+        $userId = $configContext['user_id'];
+        $configHash = $configContext['hash'];
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
-            'year' => $startYear
+            'year' => $startYear,
+            'user_id' => $userId,
+            'config_hash' => $configHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -512,6 +709,12 @@ class ErosionTileService
                     'end_year' => $endYear,
                     'label' => $periodLabel,
                 ],
+                'config' => [
+                    'hash' => $configHash,
+                    'overrides' => $configContext['overrides'],
+                    'defaults_version' => $configContext['version'],
+                ],
+                'user_id' => $userId,
             ]
         );
 
@@ -526,7 +729,10 @@ class ErosionTileService
             $map->update([
                 'status' => 'failed',
                 'error_message' => $error,
-                'metadata' => $updatedMetadata
+                'metadata' => $updatedMetadata,
+                'user_id' => $userId,
+                'config_hash' => $configHash,
+                'config_snapshot' => $configContext['snapshot'] ?? $map->config_snapshot,
             ]);
             
             Log::info("Map updated to failed: {$areaType} {$areaId}, period {$periodLabel}");
@@ -540,11 +746,14 @@ class ErosionTileService
                     'area_type' => $areaType,
                     'area_id' => $areaId,
                     'year' => $startYear,
+                    'user_id' => $userId,
+                    'config_hash' => $configHash,
                 ],
                 [
                     'status' => 'failed',
                     'error_message' => $error,
-                    'metadata' => $metadata
+                    'metadata' => $metadata,
+                    'config_snapshot' => $configContext['snapshot'],
                 ]
             );
             

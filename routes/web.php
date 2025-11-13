@@ -9,6 +9,7 @@ Route::get('/', [HomeController::class, 'index']);
 
 Route::middleware('guest')->group(function () {
     Route::get('/admin/login', [AdminAuthController::class, 'create'])->name('admin.login');
+    Route::get('/admin/login', [AdminAuthController::class, 'create'])->name('login');
     Route::post('/admin/login', [AdminAuthController::class, 'store'])->name('admin.login.submit');
 });
 
@@ -28,6 +29,10 @@ Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
 
     Route::get('/usage-history', function () {
         return Inertia::render('Admin/UsageHistory');
+    });
+
+    Route::get('/rusle-config', function () {
+        return Inertia::render('Admin/RusleConfig');
     });
 });
 

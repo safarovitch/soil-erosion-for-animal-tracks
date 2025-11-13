@@ -16,16 +16,21 @@ from requests.exceptions import ReadTimeout, RequestException
 from rasterio.merge import merge
 from gee_service import gee_service
 from rusle_calculator import RUSLECalculator
+from rusle_config import RUSLEConfig, build_config
 
 logger = logging.getLogger(__name__)
 
 class ErosionRasterGenerator:
     """Generate GeoTIFF rasters from RUSLE computations"""
     
-    def __init__(self, storage_path='/var/www/rusle-icarda/storage/rusle-tiles'):
+    def __init__(self, storage_path='/var/www/rusle-icarda/storage/rusle-tiles', rusle_config=None):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        self.rusle_calc = RUSLECalculator()
+        if isinstance(rusle_config, RUSLEConfig):
+            self.config = rusle_config
+        else:
+            self.config = build_config(rusle_config)
+        self.rusle_calc = RUSLECalculator(self.config)
         
     def generate_geotiff(self, area_type, area_id, year, geometry_json, bbox=None, end_year=None):
         """
@@ -164,6 +169,8 @@ class ErosionRasterGenerator:
                     scale=max(100, scale)
                 )
             }
+            if self.rusle_calc.include_config_snapshot:
+                metadata['rusle_config'] = self.config.to_dict()
             
             return str(output_path), statistics, metadata
             

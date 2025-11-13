@@ -72,11 +72,14 @@ class ErosionTileController extends Controller
             ], 422);
         }
 
+        $user = $request->user() ?? auth()->user();
+
         $result = $this->service->getOrQueueMap(
             $validated['area_type'],
             $validated['area_id'],
             $startYear,
-            $endYear
+            $endYear,
+            $user
         );
 
         return response()->json($result);

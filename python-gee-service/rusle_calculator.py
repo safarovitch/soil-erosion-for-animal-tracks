@@ -8,7 +8,10 @@ import math
 import numpy as np
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
 from gee_service import gee_service
+from rusle_config import RUSLEConfig, build_config
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +52,324 @@ class RUSLECalculator:
     LONG_TERM_R_END_YEAR = 2024  # Exclusive upper bound for filterDate
     FLOW_ACC_GRID_SIZE = 300  # meters, matches HydroSHEDS 30 arc-second (~927m) res resampled to 300m exports
     
-    def __init__(self):
-        pass
+    def __init__(self, config: Optional[Mapping[str, Any]] = None):
+        if isinstance(config, RUSLEConfig):
+            self.config = config
+        else:
+            self.config = build_config(config)
+        self._initialize_parameters()
+
+    def _initialize_parameters(self) -> None:
+        # R-factor parameters
+        self.r_factor_params = {
+            "coefficient": float(self.config.get("r_factor.coefficient", 0.562)),
+            "intercept": float(self.config.get("r_factor.intercept", -8.12)),
+            "long_term_start_year": int(
+                self.config.get("r_factor.long_term_start_year", self.LONG_TERM_R_START_YEAR)
+            ),
+            "long_term_end_year": int(
+                self.config.get("r_factor.long_term_end_year", self.LONG_TERM_R_END_YEAR)
+            ),
+            "use_long_term_default": bool(
+                self.config.get("r_factor.use_long_term_default", True)
+            ),
+        }
+
+        # K-factor parameters
+        self.k_factor_params = {
+            "sand_fraction_multiplier": float(
+                self.config.get("k_factor.sand_fraction_multiplier", 0.2)
+            ),
+            "soc_to_organic_multiplier": float(
+                self.config.get("k_factor.soc_to_organic_multiplier", 0.01724)
+            ),
+            "base_constant": float(self.config.get("k_factor.base_constant", 27.66)),
+            "m_exponent": float(self.config.get("k_factor.m_exponent", 1.14)),
+            "area_factor": float(self.config.get("k_factor.area_factor", 1e-8)),
+            "organic_matter_subtract": float(
+                self.config.get("k_factor.organic_matter_subtract", 12.0)
+            ),
+            "structure_coefficient": float(
+                self.config.get("k_factor.structure_coefficient", 0.0043)
+            ),
+            "structure_baseline": float(
+                self.config.get("k_factor.structure_baseline", 2.0)
+            ),
+            "permeability_coefficient": float(
+                self.config.get("k_factor.permeability_coefficient", 0.0033)
+            ),
+            "permeability_baseline": float(
+                self.config.get("k_factor.permeability_baseline", 3.0)
+            ),
+        }
+
+        # LS-factor parameters
+        self.flow_acc_grid_size = int(
+            self.config.get("ls_factor.grid_size", self.FLOW_ACC_GRID_SIZE)
+        )
+        self.ls_factor_params = {
+            "flow_length_reference": float(
+                self.config.get("ls_factor.flow_length_reference", 22.13)
+            ),
+            "flow_exponent": float(self.config.get("ls_factor.flow_exponent", 0.4)),
+            "slope_normalisation": float(
+                self.config.get("ls_factor.slope_normalisation", 0.0896)
+            ),
+            "slope_exponent": float(
+                self.config.get("ls_factor.slope_exponent", 1.3)
+            ),
+            "minimum_slope_radians": float(
+                self.config.get("ls_factor.minimum_slope_radians", 0.0001)
+            ),
+        }
+
+        # C-factor lookup
+        class_map = self.config.get("c_factor.class_map", {})
+        if isinstance(class_map, Mapping) and class_map:
+            sorted_classes = sorted(
+                (
+                    (int(class_id), float(value))
+                    for class_id, value in class_map.items()
+                ),
+                key=lambda item: item[0],
+            )
+        else:
+            sorted_classes = [
+                (1, 0.05),
+                (2, 0.05),
+                (3, 0.05),
+                (4, 0.05),
+                (5, 0.05),
+                (6, 0.1),
+                (7, 0.1),
+                (8, 0.05),
+                (9, 0.1),
+                (10, 0.1),
+                (11, 0.0),
+                (12, 0.15),
+                (13, 0.01),
+                (14, 0.15),
+                (15, 0.0),
+                (16, 0.4),
+                (17, 0.0),
+            ]
+        self.c_factor_classes: List[int] = [item[0] for item in sorted_classes]
+        self.c_factor_values: List[float] = [item[1] for item in sorted_classes]
+        self.c_factor_default = float(self.config.get("c_factor.default_value", 0.0))
+
+        # P-factor parameters
+        self.p_factor_default = float(self.config.get("p_factor.default_value", 1.0))
+        self.p_factor_cropland_class = int(
+            self.config.get("p_factor.cropland_class", 12)
+        )
+        self.p_factor_segments = self._prepare_p_factor_segments(
+            self.config.get("p_factor.breakpoints", [])
+        )
+
+        # Soil loss clamp
+        self.soil_loss_clamp_min = float(
+            self.config.get("soil_loss.clamp_min", 0.0)
+        )
+        self.soil_loss_clamp_max = float(
+            self.config.get("soil_loss.clamp_max", 200.0)
+        )
+
+        # Erosion class definitions
+        self.erosion_classes = self._prepare_erosion_classes(
+            self.config.get("erosion_classes", [])
+        )
+        self.erosion_class_labels = {cls["key"]: cls["label"] for cls in self.erosion_classes}
+
+        # Rainfall statistics parameters
+        self.rainfall_mean_scale = float(
+            self.config.get("rainfall_statistics.mean_scale", 5000)
+        )
+        self.rainfall_cv_scale = float(
+            self.config.get("rainfall_statistics.cv_scale", 5000)
+        )
+        self.rainfall_trend_rules = self._prepare_trend_rules(
+            self.config.get("rainfall_statistics.trend_interpretation", [])
+        )
+        self.rainfall_cv_rules = self._prepare_cv_rules(
+            self.config.get("rainfall_statistics.cv_interpretation", [])
+        )
+
+        self.include_config_snapshot = bool(
+            self.config.get("logging.include_config_snapshot", True)
+        )
+
+    def _prepare_p_factor_segments(
+        self, raw_breakpoints: Optional[Sequence[Mapping[str, Any]]]
+    ) -> List[Dict[str, Optional[float]]]:
+        default_breakpoints = [
+            {"max": 5.0, "value": 0.10},
+            {"max": 10.0, "value": 0.12},
+            {"max": 20.0, "value": 0.14},
+            {"max": 30.0, "value": 0.19},
+            {"max": 50.0, "value": 0.25},
+            {"max": 100.0, "value": 0.33},
+            {"max": None, "value": 0.33},
+        ]
+
+        if not raw_breakpoints:
+            raw_breakpoints = []
+
+        finite_segments: List[Dict[str, float]] = []
+        infinite_segments: List[Dict[str, Optional[float]]] = []
+        for entry in raw_breakpoints:
+            value = entry.get("value")
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+
+            max_slope = entry.get("max_slope")
+            if max_slope is None:
+                infinite_segments.append({"max": None, "value": value})
+                continue
+
+            try:
+                finite_segments.append({"max": float(max_slope), "value": value})
+            except (TypeError, ValueError):
+                continue
+
+        if not finite_segments and not infinite_segments:
+            finite_segments = default_breakpoints[:-1]  # type: ignore[assignment]
+            infinite_segments = [default_breakpoints[-1]]  # type: ignore[list-item]
+
+        finite_segments.sort(key=lambda item: item["max"])
+
+        segments: List[Dict[str, Optional[float]]] = []
+        previous_max: Optional[float] = None
+        for entry in finite_segments + infinite_segments:
+            max_value = entry["max"]
+            segments.append(
+                {
+                    "min": previous_max,
+                    "max": max_value,
+                    "value": float(entry["value"]),
+                }
+            )
+            previous_max = max_value
+        return segments
+
+    def _prepare_erosion_classes(
+        self, classes: Optional[Sequence[Mapping[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        default_classes = [
+            {"key": "very_low", "label": "Very Low", "min": 0.0, "max": 5.0},
+            {"key": "low", "label": "Low", "min": 5.0, "max": 15.0},
+            {"key": "moderate", "label": "Moderate", "min": 15.0, "max": 30.0},
+            {"key": "severe", "label": "Severe", "min": 30.0, "max": 50.0},
+            {"key": "excessive", "label": "Excessive", "min": 50.0, "max": None},
+        ]
+
+        processed: List[Dict[str, Any]] = []
+        if classes:
+            for entry in classes:
+                key = entry.get("key")
+                if not key:
+                    continue
+                processed.append(
+                    {
+                        "key": str(key),
+                        "label": str(entry.get("label", key)),
+                        "min": float(entry.get("min", 0.0)),
+                        "max": (
+                            float(entry["max"])
+                            if entry.get("max") is not None
+                            else None
+                        ),
+                    }
+                )
+        if not processed:
+            processed = default_classes
+        processed.sort(key=lambda item: item["min"])
+        return processed
+
+    def _prepare_trend_rules(
+        self, rules: Optional[Sequence[Mapping[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        default_rules = [
+            {"min": 2.0, "label": "Significant increasing trend"},
+            {"min": 0.5, "label": "Moderate increasing trend"},
+            {"min": -0.5, "label": "Stable/No significant trend"},
+            {"min": -2.0, "label": "Moderate decreasing trend"},
+            {"min": None, "label": "Significant decreasing trend"},
+        ]
+
+        processed: List[Dict[str, Any]] = []
+        if rules:
+            for entry in rules:
+                label = entry.get("label")
+                if label is None:
+                    continue
+                min_value = entry.get("min")
+                if min_value is None:
+                    processed.append({"min": None, "label": str(label)})
+                else:
+                    try:
+                        processed.append({"min": float(min_value), "label": str(label)})
+                    except (TypeError, ValueError):
+                        continue
+        if not processed:
+            processed = default_rules
+        processed.sort(
+            key=lambda item: float("-inf")
+            if item["min"] is None
+            else item["min"],
+            reverse=True,
+        )
+        return processed
+
+    def _prepare_cv_rules(
+        self, rules: Optional[Sequence[Mapping[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        default_rules = [
+            {"max": 10.0, "label": "Very low variability"},
+            {"max": 20.0, "label": "Low variability"},
+            {"max": 30.0, "label": "Moderate variability"},
+            {"max": 40.0, "label": "High variability"},
+            {"max": None, "label": "Very high variability"},
+        ]
+
+        processed: List[Dict[str, Any]] = []
+        if rules:
+            for entry in rules:
+                label = entry.get("label")
+                if label is None:
+                    continue
+                max_value = entry.get("max")
+                if max_value is None:
+                    processed.append({"max": None, "label": str(label)})
+                else:
+                    try:
+                        processed.append({"max": float(max_value), "label": str(label)})
+                    except (TypeError, ValueError):
+                        continue
+        if not processed:
+            processed = default_rules
+        processed.sort(
+            key=lambda item: float("inf") if item["max"] is None else item["max"]
+        )
+        return processed
+
+    def _interpret_trend(self, value: float) -> str:
+        for rule in self.rainfall_trend_rules:
+            threshold = rule["min"]
+            if threshold is None or value >= threshold:
+                return rule["label"]
+        return self.rainfall_trend_rules[-1]["label"]
+
+    def _interpret_cv(self, value: float) -> str:
+        for rule in self.rainfall_cv_rules:
+            threshold = rule["max"]
+            if threshold is None or value < threshold:
+                return rule["label"]
+        return self.rainfall_cv_rules[-1]["label"]
+
+    def config_snapshot(self) -> Dict[str, Any]:
+        return self.config.to_dict()
     
     @staticmethod
     def _clip_image(image, geometry):
@@ -88,9 +407,10 @@ class RUSLECalculator:
         Using CHIRPS precipitation data
         """
         try:
-            if use_long_term:
-                start_year = self.LONG_TERM_R_START_YEAR
-                end_year = self.LONG_TERM_R_END_YEAR
+            params = self.r_factor_params
+            if use_long_term and params["use_long_term_default"]:
+                start_year = params["long_term_start_year"]
+                end_year = params["long_term_end_year"]
                 start_date = f'{start_year}-01-01'
                 end_date = f'{end_year}-01-01'
                 years = max(1, end_year - start_year)
@@ -110,8 +430,7 @@ class RUSLECalculator:
             mean_precip = total_precip.divide(years)
             
             # Linear R-factor approximation from GEE workflow
-            # R = 0.562 * P_annual - 8.12 (P in mm)
-            r_factor = mean_precip.multiply(0.562).subtract(8.12)
+            r_factor = mean_precip.multiply(params["coefficient"]).add(params["intercept"])
             r_factor = r_factor.max(0)
             r_factor = self._clip_image(r_factor, geometry)
             
@@ -145,7 +464,8 @@ class RUSLECalculator:
             total_precip = chirps.sum().toFloat()
             mean_precip = total_precip.divide(years)
             
-            r_factor = mean_precip.multiply(0.562).subtract(8.12)
+            params = self.r_factor_params
+            r_factor = mean_precip.multiply(params["coefficient"]).add(params["intercept"])
             r_factor = r_factor.max(0)
             r_factor = self._clip_image(r_factor, geometry)
             
@@ -165,11 +485,15 @@ class RUSLECalculator:
             organic_carbon = ee.Image("OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02").select('b0')
             
             clay = self._clip_image(clay, geometry)
-            sand = self._clip_image(sand, geometry).multiply(0.2)  # taking out fine sand (20%)
+            sand = self._clip_image(sand, geometry).multiply(
+                self.k_factor_params["sand_fraction_multiplier"]
+            )
             organic_carbon = self._clip_image(organic_carbon, geometry)
             
             # Convert SOC (%) to organic matter (%)
-            organic_matter = organic_carbon.multiply(0.01724)
+            organic_matter = organic_carbon.multiply(
+                self.k_factor_params["soc_to_organic_multiplier"]
+            )
             
             # Derive silt as residual
             silt = ee.Image.constant(100).subtract(sand).subtract(clay)
@@ -177,14 +501,24 @@ class RUSLECalculator:
             # Compute M parameter
             M = silt.add(sand.multiply(ee.Image.constant(100).subtract(clay)))
             
-            base_k = ee.Image(27.66) \
-                .multiply(M.pow(1.14)) \
-                .multiply(1e-8) \
-                .multiply(ee.Image(12).subtract(organic_matter))
+            base_k = ee.Image(self.k_factor_params["base_constant"]) \
+                .multiply(M.pow(self.k_factor_params["m_exponent"])) \
+                .multiply(self.k_factor_params["area_factor"]) \
+                .multiply(
+                    ee.Image(self.k_factor_params["organic_matter_subtract"]).subtract(organic_matter)
+                )
             
             k_factor = base_k \
-                .add(ee.Image(0.0043).multiply(ee.Image(structure_code).subtract(2))) \
-                .add(ee.Image(0.0033).multiply(ee.Image(permeability_code).subtract(3)))
+                .add(
+                    ee.Image(self.k_factor_params["structure_coefficient"]).multiply(
+                        ee.Image(structure_code).subtract(self.k_factor_params["structure_baseline"])
+                    )
+                ) \
+                .add(
+                    ee.Image(self.k_factor_params["permeability_coefficient"]).multiply(
+                        ee.Image(permeability_code).subtract(self.k_factor_params["permeability_baseline"])
+                    )
+                )
             
             k_factor = k_factor.max(0)
             k_factor = self._clip_image(k_factor, geometry)
@@ -201,14 +535,18 @@ class RUSLECalculator:
         Using SRTM DEM and HydroSHEDS flow accumulation
         """
         try:
-            grid_size = grid_size or self.FLOW_ACC_GRID_SIZE
+            params = self.ls_factor_params
+            grid_size = grid_size or self.flow_acc_grid_size
             
             dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
             dem = self._clip_image(dem, geometry)
             
             slope_deg = ee.Terrain.slope(dem)
             slope_rad = slope_deg.multiply(math.pi / 180.0)
-            slope_rad = slope_rad.where(slope_rad.eq(0), 0.0001)
+            slope_rad = slope_rad.where(
+                slope_rad.eq(0),
+                params["minimum_slope_radians"]
+            )
             sin_slope = slope_rad.sin()
             
             flow_acc = ee.Image("WWF/HydroSHEDS/30ACC")
@@ -216,9 +554,13 @@ class RUSLECalculator:
             flow_acc = flow_acc.where(flow_acc.eq(0), 1)
             
             ls_factor = flow_acc.multiply(grid_size) \
-                .divide(22.13) \
-                .pow(0.4) \
-                .multiply(sin_slope.divide(0.0896).pow(1.3))
+                .divide(params["flow_length_reference"]) \
+                .pow(params["flow_exponent"]) \
+                .multiply(
+                    sin_slope.divide(params["slope_normalisation"]).pow(
+                        params["slope_exponent"]
+                    )
+                )
             
             ls_factor = ls_factor.max(0)
             ls_factor = self._clip_image(ls_factor, geometry)
@@ -238,10 +580,11 @@ class RUSLECalculator:
             land_cover = self._load_modis_landcover(year, geometry)
             
             # Remap MODIS IGBP classes to C-factor values (based on provided GEE script)
-            class_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
-            c_values = [0.05, 0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.05, 0.1, 0.1, 0.0, 0.15, 0.01, 0.15, 0.0, 0.4, 0.0]
-            
-            c_factor = land_cover.remap(class_ids, c_values, 0).rename('C_factor')
+            c_factor = land_cover.remap(
+                self.c_factor_classes,
+                self.c_factor_values,
+                self.c_factor_default
+            ).rename('C_factor')
             c_factor = self._clip_image(c_factor, geometry)
             
             return c_factor.rename('C_factor')
@@ -262,18 +605,19 @@ class RUSLECalculator:
             dem = self._clip_image(dem, geometry)
             slope_deg = ee.Terrain.slope(dem)
             
-            p_factor = ee.Image.constant(1.0)
+            p_factor = ee.Image.constant(self.p_factor_default)
             p_factor = self._clip_image(p_factor, geometry)
             
-            cropland = land_cover.eq(12)
-            
-            p_factor = p_factor.where(cropland.And(slope_deg.lte(5)), 0.10)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(5)).And(slope_deg.lte(10)), 0.12)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(10)).And(slope_deg.lte(20)), 0.14)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(20)).And(slope_deg.lte(30)), 0.19)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(30)).And(slope_deg.lte(50)), 0.25)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(50)).And(slope_deg.lte(100)), 0.33)
-            p_factor = p_factor.where(cropland.And(slope_deg.gt(100)), 0.33)
+            cropland = land_cover.eq(self.p_factor_cropland_class)
+            for segment in self.p_factor_segments:
+                condition = cropland
+                min_slope = segment["min"]
+                max_slope = segment["max"]
+                if min_slope is not None:
+                    condition = condition.And(slope_deg.gt(min_slope))
+                if max_slope is not None:
+                    condition = condition.And(slope_deg.lte(max_slope))
+                p_factor = p_factor.where(condition, segment["value"])
             
             return p_factor.rename('P_factor')
             
@@ -311,7 +655,7 @@ class RUSLECalculator:
                 .multiply(ls_factor) \
                 .multiply(c_factor) \
                 .multiply(p_factor) \
-                .clamp(0, 200)  # Clamp to reasonable range
+                .clamp(self.soil_loss_clamp_min, self.soil_loss_clamp_max)
             
             # Ensure single band output (select first band if multiple exist)
             soil_loss = soil_loss.select([0])
@@ -351,7 +695,7 @@ class RUSLECalculator:
             logger.error(f"Failed to compute RUSLE: {str(e)}")
             raise
     
-    def compute_rainfall_statistics(self, start_year, end_year, geometry, scale=5000):
+    def compute_rainfall_statistics(self, start_year, end_year, geometry, scale: Optional[int] = None):
         """
         Compute rainfall statistics for a multi-year range.
         Returns:
@@ -367,6 +711,10 @@ class RUSLECalculator:
             raise ValueError("end_year must be greater than or equal to start_year")
         
         try:
+            base_scale = self.rainfall_mean_scale
+            requested_scale = scale if scale is not None else base_scale
+            analysis_scale = max(requested_scale, base_scale)
+
             years_sequence = ee.List.sequence(start_year, end_year)
             
             def annual_total(year):
@@ -388,7 +736,7 @@ class RUSLECalculator:
                 reduction = image.reduceRegion(
                     reducer=ee.Reducer.mean(),
                     geometry=geometry,
-                    scale=scale,
+                    scale=analysis_scale,
                     bestEffort=True,
                     maxPixels=1e13
                 )
@@ -422,6 +770,9 @@ class RUSLECalculator:
                     'mean_annual_rainfall_mm': 0.0,
                     'trend_mm_per_year': 0.0,
                     'coefficient_of_variation_percent': 0.0,
+                    'trend_interpretation': self._interpret_trend(0.0),
+                    'variability_interpretation': self._interpret_cv(0.0),
+                    'analysis_scale_m': analysis_scale,
                     'yearly_totals_mm': []
                 }
             
@@ -441,6 +792,9 @@ class RUSLECalculator:
                 'mean_annual_rainfall_mm': round(mean_rainfall, 2),
                 'trend_mm_per_year': round(trend_slope, 4),
                 'coefficient_of_variation_percent': round(cv_percent, 2),
+                'trend_interpretation': self._interpret_trend(trend_slope),
+                'variability_interpretation': self._interpret_cv(cv_percent),
+                'analysis_scale_m': analysis_scale,
                 'yearly_totals_mm': yearly_values
             }
         except Exception as e:
@@ -488,47 +842,39 @@ class RUSLECalculator:
                     ).get('area')
                 )
             
-            areas_dict = ee.Dictionary({
-                'total': total_area,
-                'very_low': class_area(0, 5),
-                'low': class_area(5, 15),
-                'moderate': class_area(15, 30),
-                'severe': class_area(30, 50),
-                'excessive': class_area(50, None)
-            }).getInfo()
+            class_areas = {'total': total_area}
+            for cls in self.erosion_classes:
+                class_areas[cls['key']] = class_area(cls['min'], cls['max'])
+            areas_dict = ee.Dictionary(class_areas).getInfo()
             
             total_area_m2 = float(areas_dict.get('total') or 0.0)
             if total_area_m2 <= 0:
-                zero_result = {
-                    'percentage': 0.0,
-                    'area_hectares': 0.0
-                }
-                return {
-                    'very_low': zero_result,
-                    'low': zero_result,
-                    'moderate': zero_result,
-                    'severe': zero_result,
-                    'excessive': zero_result,
-                    'total_area_hectares': 0.0
-                }
+                result = {}
+                for cls in self.erosion_classes:
+                    result[cls['key']] = {
+                        'label': cls['label'],
+                        'percentage': 0.0,
+                        'area_hectares': 0.0
+                    }
+                result['total_area_hectares'] = 0.0
+                return result
             
-            def to_output(key):
+            def to_output(key: str, label: str):
                 area_m2 = float(areas_dict.get(key) or 0.0)
                 area_ha = area_m2 / 10000.0
                 percentage = (area_m2 / total_area_m2) * 100.0 if total_area_m2 > 0 else 0.0
                 return {
+                    'label': label,
                     'percentage': round(percentage, 2),
                     'area_hectares': round(area_ha, 2)
                 }
             
-            return {
-                'very_low': to_output('very_low'),
-                'low': to_output('low'),
-                'moderate': to_output('moderate'),
-                'severe': to_output('severe'),
-                'excessive': to_output('excessive'),
-                'total_area_hectares': round(total_area_m2 / 10000.0, 2)
+            output = {
+                cls['key']: to_output(cls['key'], cls['label'])
+                for cls in self.erosion_classes
             }
+            output['total_area_hectares'] = round(total_area_m2 / 10000.0, 2)
+            return output
         except Exception as e:
             logger.error(f"Failed to compute erosion class breakdown: {str(e)}", exc_info=True)
             raise

@@ -6,6 +6,7 @@ from raster_generator import ErosionRasterGenerator
 from tile_generator import MapTileGenerator
 from gee_service import gee_service
 from config import Config
+from rusle_config import build_config
 import logging
 import requests
 import json
@@ -37,7 +38,18 @@ def _post_to_laravel(path, payload, timeout=10):
 
 
 @celery_app.task(bind=True, name='tasks.generate_erosion_map')
-def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bbox, end_year=None):
+def generate_erosion_map_task(
+    self,
+    area_type,
+    area_id,
+    start_year,
+    geometry,
+    bbox,
+    end_year=None,
+    config_overrides=None,
+    user_id=None,
+    defaults_version=None,
+):
     """
     Background task to generate erosion map (GeoTIFF + tiles)
     
@@ -69,8 +81,14 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
                 'year': start_year,  # Legacy field for backward compatibility
                 'start_year': start_year,
                 'end_year': end_year,
-                'period_label': period_label
+                'period_label': period_label,
             }
+            if config_overrides:
+                callback_data['config_overrides'] = config_overrides
+            if user_id is not None:
+                callback_data['user_id'] = user_id
+            if defaults_version is not None:
+                callback_data['defaults_version'] = defaults_version
             _post_to_laravel('/api/erosion/task-started', callback_data)
             logger.info("Task started callback acknowledged by Laravel")
         except Exception as e:
@@ -107,7 +125,19 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
         )
         
         logger.info("Starting raster generation...")
-        raster_gen = ErosionRasterGenerator()
+        rusle_config = build_config(config_overrides)
+        if config_overrides:
+            logger.info("Applying custom RUSLE configuration overrides for task %s", self.request.id)
+        raster_gen = ErosionRasterGenerator(rusle_config=rusle_config)
+        metadata_defaults = {}
+        if config_overrides:
+            metadata_defaults['config_overrides'] = config_overrides
+        if user_id is not None:
+            metadata_defaults['user_id'] = user_id
+        if defaults_version is not None:
+            metadata_defaults['defaults_version'] = defaults_version
+        if rusle_config.get("logging.include_config_snapshot", True):
+            metadata_defaults['rusle_config'] = rusle_config.to_dict()
         metadata = {}
 
         geotiff_path, statistics, metadata = raster_gen.generate_geotiff(
@@ -118,6 +148,11 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
             bbox,
             end_year=end_year
         )
+        if metadata_defaults:
+            merged_metadata = dict(metadata_defaults)
+            if metadata:
+                merged_metadata.update(metadata)
+            metadata = merged_metadata
         
         logger.info(f"✓ GeoTIFF generated: {geotiff_path}")
         logger.info(f"  Statistics: {statistics}")
@@ -166,6 +201,14 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
                 'statistics': statistics,
                 'metadata': metadata
             }
+            if config_overrides:
+                callback_data['config_overrides'] = config_overrides
+            if user_id is not None:
+                callback_data['user_id'] = user_id
+            if defaults_version is not None:
+                callback_data['defaults_version'] = defaults_version
+            if rusle_config.get("logging.include_config_snapshot", True):
+                callback_data['rusle_config'] = rusle_config.to_dict()
             _post_to_laravel('/api/erosion/task-complete', callback_data, timeout=30)
             logger.info("Task completion callback acknowledged by Laravel")
         except Exception as e:
@@ -184,6 +227,14 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
             'end_year': end_year,
             'period_label': period_label
         }
+        if config_overrides:
+            result['config_overrides'] = config_overrides
+        if user_id is not None:
+            result['user_id'] = user_id
+        if defaults_version is not None:
+            result['defaults_version'] = defaults_version
+        if rusle_config.get("logging.include_config_snapshot", True):
+            result['rusle_config'] = rusle_config.to_dict()
         
         logger.info(f"=== Task completed successfully ===")
         # logger.info(f"Result: {json.dumps(result, indent=2)}")
@@ -211,6 +262,14 @@ def generate_erosion_map_task(self, area_type, area_id, start_year, geometry, bb
                 'error_type': error_type,
                 'metadata': metadata
             }
+            if config_overrides:
+                callback_data['config_overrides'] = config_overrides
+            if user_id is not None:
+                callback_data['user_id'] = user_id
+            if defaults_version is not None:
+                callback_data['defaults_version'] = defaults_version
+            if rusle_config.get("logging.include_config_snapshot", True):
+                callback_data['rusle_config'] = rusle_config.to_dict()
             _post_to_laravel('/api/erosion/task-failed', callback_data, timeout=30)
             logger.info("Task failed callback acknowledged by Laravel")
         except Exception as callback_error:
