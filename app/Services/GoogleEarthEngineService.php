@@ -244,6 +244,131 @@ class GoogleEarthEngineService
     }
 
     /**
+     * Compute erosion data for custom geometry (GeoJSON).
+     */
+    public function computeErosionForCustomGeometry(array $geometry, int $startYear, ?int $endYear = null, string $period = 'annual'): array
+    {
+        $endYear = $endYear ?? $startYear;
+        $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
+
+        try {
+            // Use Python GEE service for all computations
+            $pythonServiceUrl = config('services.gee.url', env('PYTHON_GEE_SERVICE_URL', 'http://127.0.0.1:5000'));
+
+            Log::info('Computing erosion for custom geometry via Python service', [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'period' => $period,
+            ]);
+
+            // Get all factors and soil erosion from Python service
+            $payload = [
+                'area_geometry' => $geometry, // GeoJSON geometry
+                'year' => $endYear, // Legacy compatibility
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'factors' => 'all',
+                'scale' => 1000,
+            ];
+
+            $payload = $this->attachConfigPayload($payload);
+
+            $response = Http::timeout(1800)->post("{$pythonServiceUrl}/api/rusle/factors", $payload);
+
+            if (!$response->successful()) {
+                $error = $response->json() ?? [];
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    $response->status(),
+                    $error['error'] ?? 'Python GEE service request failed',
+                    $error
+                );
+            }
+
+            $result = $response->json();
+
+            if (!$result['success']) {
+                throw GoogleEarthEngineException::apiRequestFailed(
+                    500,
+                    $result['error'] ?? 'Failed to compute erosion for custom geometry',
+                    $result
+                );
+            }
+
+            $data = $result['data'];
+
+            // Build statistics response similar to computeSingleAreaStatistics
+            $statistics = [
+                'mean_erosion_rate' => $data['statistics']['mean'] ?? 0,
+                'min_erosion_rate' => $data['statistics']['min'] ?? 0,
+                'max_erosion_rate' => $data['statistics']['max'] ?? 0,
+                'erosion_cv' => $data['statistics']['std_dev'] ?? 0,
+                'severity_distribution' => $data['severity_breakdown'] ?? [],
+                'rusle_factors' => [
+                    'r_factor' => $data['factors']['r'] ?? null,
+                    'k_factor' => $data['factors']['k'] ?? null,
+                    'ls_factor' => $data['factors']['ls'] ?? null,
+                    'c_factor' => $data['factors']['c'] ?? null,
+                    'p_factor' => $data['factors']['p'] ?? null,
+                ],
+            ];
+
+            // Fetch rainfall statistics
+            try {
+                $rainfallPayload = [
+                    'area_geometry' => $geometry,
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                ];
+                $rainfallPayload = $this->attachConfigPayload($rainfallPayload);
+
+                $rainfallResponse = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/slope", $rainfallPayload);
+                if ($rainfallResponse->successful()) {
+                    $rainfallData = $rainfallResponse->json();
+                    if ($rainfallData['success'] && isset($rainfallData['data']['mean'])) {
+                        $statistics['rainfall_slope'] = $rainfallData['data']['mean'];
+                    }
+                }
+
+                $cvResponse = Http::timeout(300)->post("{$pythonServiceUrl}/api/rainfall/cv", $rainfallPayload);
+                if ($cvResponse->successful()) {
+                    $cvData = $cvResponse->json();
+                    if ($cvData['success'] && isset($cvData['data']['mean'])) {
+                        $statistics['rainfall_cv'] = $cvData['data']['mean'];
+                    }
+                }
+            } catch (Exception $e) {
+                Log::warning('Failed to fetch rainfall statistics for custom geometry', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            return [
+                'statistics' => $statistics,
+                'period_label' => $periodLabel,
+            ];
+        } catch (GoogleEarthEngineException $e) {
+            Log::error('GEE computation error for custom geometry', [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        } catch (Exception $e) {
+            Log::error('GEE computation error for custom geometry', [
+                'start_year' => $startYear,
+                'end_year' => $endYear,
+                'error' => $e->getMessage(),
+            ]);
+            throw GoogleEarthEngineException::apiRequestFailed(
+                500,
+                "Failed to compute erosion for custom geometry: " . $e->getMessage(),
+                [],
+                $e
+            );
+        }
+    }
+
+    /**
      * Compute erosion statistics for a single geometry without aggregation.
      */
     private function computeSingleAreaStatistics(Region|District $area, int $startYear, int $endYear, string $period, string $periodLabel): array
@@ -268,7 +393,8 @@ class GoogleEarthEngineService
             'start_year' => $startYear,
             'end_year' => $endYear,
             'factors' => 'all',
-            'scale' => 100,
+            'scale' => 1000,
+            'scale' => 1000,
         ];
 
         $payload = $this->attachConfigPayload($payload);
@@ -879,7 +1005,7 @@ class GoogleEarthEngineService
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'factors' => 'all',
-                'scale' => 100
+                'scale' => 1000
             ];
 
             $factorsPayload = $this->attachConfigPayload($factorsPayload);
@@ -1327,7 +1453,7 @@ class GoogleEarthEngineService
             'area_geometry' => $geometry,
             'year' => $year,
             'factors' => [$factorKey],  // Request only the specific factor
-            'scale' => 100
+            'scale' => 1000
         ];
 
         $payload = $this->attachConfigPayload($payload);

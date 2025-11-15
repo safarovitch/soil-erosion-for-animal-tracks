@@ -83,6 +83,28 @@
             District checkboxes disable automatically when more than one region
             is active.
         </p>
+
+        <!-- Custom Area Selection Button -->
+        <div class="mt-4 pt-4 border-t border-gray-200">
+            <button
+                type="button"
+                @click="handleCustomAreaClick"
+                :class="[
+                    'w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center justify-center space-x-2',
+                    isCustomAreaActive
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                ]"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l11.563-11.563zM16.862 4.487l-3.274 3.274M16.862 4.487L19.5 7.125" />
+                </svg>
+                <span>{{ isCustomAreaActive ? 'Drawing Custom Area...' : 'Draw Custom Area' }}</span>
+            </button>
+            <p class="mt-2 text-xs text-gray-500 text-center">
+                Draw a polygon on the map to calculate erosion statistics for a custom area
+            </p>
+        </div>
     </div>
 </template>
 
@@ -112,12 +134,14 @@ const emit = defineEmits([
     "region-change",
     "district-change",
     "areas-change",
+    "custom-area-toggle",
 ]);
 
 const selectedRegionIds = ref(new Set());
 const selectedDistrictIds = ref(new Set());
 const expandedRegions = ref(new Set());
 const suppressEmit = ref(false);
+const isCustomAreaActive = ref(false);
 
 const regionMap = computed(() => {
     const map = new Map();
@@ -325,6 +349,17 @@ const toggleRegionExpanded = (regionId) => {
         next.add(regionId);
     }
     expandedRegions.value = next;
+};
+
+const handleCustomAreaClick = () => {
+    isCustomAreaActive.value = !isCustomAreaActive.value;
+    emit("custom-area-toggle", isCustomAreaActive.value);
+    
+    // Clear region/district selections when custom area is activated
+    if (isCustomAreaActive.value) {
+        clearAllSelections();
+        emitSelectionChange();
+    }
 };
 
 watch(

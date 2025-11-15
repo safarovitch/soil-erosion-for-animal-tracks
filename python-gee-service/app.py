@@ -118,22 +118,24 @@ def compute_rusle():
         # Convert GeoJSON to EE Geometry
         geometry = gee_service.geometry_from_geojson(area_geometry)
         
+        calculation_year = end_year
+
         # Compute RUSLE for the requested period
         if end_year != start_year:
             r_factor = rusle_calc.compute_r_factor_range(start_year, end_year, geometry)
             result = rusle_calc.compute_rusle(
-                start_year,
+                calculation_year,
                 geometry,
                 r_factor_image=r_factor
             )
         else:
-            result = rusle_calc.compute_rusle(start_year, geometry)
+            result = rusle_calc.compute_rusle(calculation_year, geometry)
         
         rainfall_stats = rusle_calc.compute_rainfall_statistics(start_year, end_year, geometry)
         erosion_classes = rusle_calc.compute_erosion_class_breakdown(
             result['image'],
             geometry,
-            scale=100
+            scale=1000
         )
         
         period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
@@ -238,10 +240,11 @@ def compute_rusle_factors():
             }), 400
         
         logger.info(f"Computing factors: {factors_to_compute} for period {start_year}-{end_year}")
+        calculation_year = end_year
         
         # Compute requested factors
         factors_result = {}
-        scale = data.get('scale', 100)  # Default 100m for faster computation
+        scale = data.get('scale', 1000)  # Default 1000m for faster computation
         
         if 'r' in factors_to_compute:
             logger.info("Computing R-factor...")
@@ -359,14 +362,14 @@ def compute_rusle_factors():
             if end_year != start_year:
                 r_factor = rusle_calc.compute_r_factor_range(start_year, end_year, geometry)
                 rusle_result = rusle_calc.compute_rusle(
-                    start_year,
+                    calculation_year,
                     geometry,
                     scale=scale,
                     compute_stats=True,
                     r_factor_image=r_factor
                 )
             else:
-                rusle_result = rusle_calc.compute_rusle(start_year, geometry, scale=scale, compute_stats=True)
+                rusle_result = rusle_calc.compute_rusle(calculation_year, geometry, scale=scale, compute_stats=True)
 
             soil_erosion = rusle_result['statistics']
 
@@ -731,6 +734,10 @@ def trigger_precompute():
         geometry = data.get('area_geometry')
         bbox = data.get('bbox')
         config_overrides = data.get('rusle_config') or data.get('config_overrides')
+        user_id = data.get('user_id')
+        defaults_version = data.get('defaults_version')
+        geometry_hash = data.get('geometry_hash')
+        storage_key = data.get('storage_key')
         
         if start_year is None:
             return jsonify({
@@ -756,10 +763,10 @@ def trigger_precompute():
         period_label = str(start_year) if start_year == end_year else f"{start_year}-{end_year}"
         
         # Validate area_type
-        if area_type not in ['region', 'district']:
+        if area_type not in ['region', 'district', 'custom']:
             return jsonify({
                 'success': False,
-                'error': 'area_type must be "region" or "district"'
+                'error': 'area_type must be "region", "district", or "custom"'
             }), 400
         
         # Queue background task
@@ -774,7 +781,9 @@ def trigger_precompute():
             end_year,  # Pass as positional argument (6th parameter)
             config_overrides=config_overrides,
             user_id=user_id,
-            defaults_version=defaults_version
+            defaults_version=defaults_version,
+            geometry_hash=geometry_hash,
+            storage_key=storage_key
         )
         
         logger.info(f"Task queued with ID: {task.id}")
@@ -791,6 +800,10 @@ def trigger_precompute():
             response_payload['user_id'] = user_id
         if defaults_version is not None:
             response_payload['defaults_version'] = defaults_version
+        if geometry_hash is not None:
+            response_payload['geometry_hash'] = geometry_hash
+        if storage_key is not None:
+            response_payload['storage_key'] = storage_key
         return jsonify(response_payload), 202
         
     except Exception as e:

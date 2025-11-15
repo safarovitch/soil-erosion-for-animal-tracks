@@ -144,7 +144,7 @@ class CalculateErosionFactors extends Command
                         'area_geometry' => $geometry,
                         'year' => $year,
                         'factors' => $factorsList,
-                        'scale' => 100  // 100m resolution for faster computation
+                        'scale' => 1000  // 1km resolution for faster computation
                     ]
                 );
 

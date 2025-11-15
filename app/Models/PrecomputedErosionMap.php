@@ -21,6 +21,8 @@ class PrecomputedErosionMap extends Model
         'computed_at',
         'error_message',
         'config_hash',
+        'geometry_hash',
+        'geometry_snapshot',
         'config_snapshot',
     ];
 
@@ -31,6 +33,7 @@ class PrecomputedErosionMap extends Model
         'year' => 'integer',
         'area_id' => 'integer',
         'user_id' => 'integer',
+        'geometry_snapshot' => 'array',
         'config_snapshot' => 'array',
     ];
 
@@ -49,7 +52,7 @@ class PrecomputedErosionMap extends Model
 
         // Check if tiles directory exists
         $period = $this->period_label;
-        $tilesDir = storage_path("rusle-tiles/tiles/{$this->area_type}_{$this->area_id}/{$period}");
+        $tilesDir = storage_path("rusle-tiles/tiles/{$this->tile_storage_key}/{$period}");
         return file_exists($tilesDir) && is_dir($tilesDir);
     }
 
@@ -117,7 +120,20 @@ class PrecomputedErosionMap extends Model
         // Generate URL pattern manually with placeholders
         $baseUrl = url('/api/erosion/tiles');
         $period = $this->period_label;
-        return "{$baseUrl}/{$this->area_type}/{$this->area_id}/{$period}/{z}/{x}/{y}.png";
+        return "{$baseUrl}/{$this->area_type}/{$this->tile_storage_key}/{$period}/{z}/{x}/{y}.png";
+    }
+
+    public function getTileStorageKeyAttribute(): string
+    {
+        if (!empty($this->metadata['tile_path_key'])) {
+            return $this->metadata['tile_path_key'];
+        }
+
+        if (!empty($this->geometry_hash)) {
+            return "{$this->area_type}_" . substr($this->geometry_hash, 0, 24);
+        }
+
+        return "{$this->area_type}_{$this->area_id}";
     }
 
     public function getPeriodLabelAttribute(): string

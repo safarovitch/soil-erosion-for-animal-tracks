@@ -31,7 +31,7 @@ DEFAULT_RUSLE_CONFIG: Dict[str, Any] = {
         "permeability_baseline": 3.0,
     },
     "ls_factor": {
-        "grid_size": 300,
+        "grid_size": 1000,
         "flow_length_reference": 22.13,
         "flow_exponent": 0.4,
         "slope_normalisation": 0.0896,

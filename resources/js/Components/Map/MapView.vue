@@ -65,6 +65,10 @@ const props = defineProps({
         type: Boolean,
         default: true,
     },
+    customAreaDrawing: {
+        type: Boolean,
+        default: false,
+    },
 });
 
 // Emits
@@ -79,6 +83,7 @@ const emit = defineEmits([
     "area-replace-selection",
     "boundary-violation",
     "layer-warning",
+    "custom-polygon-drawn",
 ]);
 
 // Reactive data
@@ -94,7 +99,11 @@ const areaHighlightLayer = ref(null); // Layer for highlighting selected areas
 const erosionDataByDistrict = ref({}); // Store erosion data for coloring
 const drawnFeatures = ref([]); // Store all drawn features for management
 const detailedErosionLayers = ref({}); // Store detailed erosion tile layers keyed by area-period
-const animatedLayers = ref(new Set()); // Track layers with animated borders
+const animatedLayers = new Set(); // Track layers with animated borders
+const tilePollingIntervals = Object.create(null); // Track active polling intervals for tile availability
+const customPolygonDraw = ref(null); // Draw interaction for custom polygon
+const customPolygonLayer = ref(null); // Layer for custom polygon
+const countryBoundaryCache = ref(null); // Cache for dissolved Tajikistan boundary geometry
 const baseLayer = ref(null); // Reference to base layer
 const labelsLayer = ref(null); // Reference to labels layer
 const tajikistanBoundaryLayer = ref(null); // Boundary layer for Tajikistan
@@ -151,6 +160,9 @@ const ensureDetailedLayerStore = () => {
 };
 
 const removeDetailedLayer = (layerKey) => {
+    // Stop polling for this layer if it exists
+    stopTilePolling(layerKey);
+    
     const layerStore = ensureDetailedLayerStore();
     const existingLayer = layerStore[layerKey];
     if (existingLayer && map.value) {
@@ -196,7 +208,7 @@ const mapTilerAttribution = hasMapTilerTerrain
     ? '© <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'
     : undefined;
 
-const currentBaseMapType = ref(hasMapTilerTerrain ? "terrain" : "osm");
+const currentBaseMapType = ref("osm");
 const availableBaseMapTypes = computed(() => {
     const options = [{ id: "osm", label: "OpenStreetMap" }];
     if (hasMapTilerTerrain) {
@@ -204,6 +216,12 @@ const availableBaseMapTypes = computed(() => {
     }
     return options;
 });
+
+const DEFAULT_TILE_MAX_ZOOM = 10;
+const parseMaxZoom = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TILE_MAX_ZOOM;
+};
 
 const createBaseLayerPair = (type) => {
     if (type === "terrain" && hasMapTilerTerrain) {
@@ -232,7 +250,9 @@ const createBaseLayerPair = (type) => {
 
     return {
         base: new TileLayer({
-            source: new OSM(),
+            source: new OSM({
+                crossOrigin: "anonymous",
+            }),
             className: "osm-base-layer",
         }),
         labels: null,
@@ -456,7 +476,7 @@ const animateBorderDrawing = (
         .substr(2, 9)}`;
 
     // Store animation ID for cleanup
-    animatedLayers.value.add(animationId);
+    animatedLayers.add(animationId);
 
     const animate = () => {
         const elapsed = Date.now() - startTime;
@@ -491,7 +511,7 @@ const animateBorderDrawing = (
         });
 
         // Continue animation if not complete and layer still exists
-        if (progress < 1 && animatedLayers.value.has(animationId)) {
+        if (progress < 1 && animatedLayers.has(animationId)) {
             requestAnimationFrame(animate);
         } else {
             // Animation complete - set final style
@@ -517,7 +537,7 @@ const animateBorderDrawing = (
             });
 
             // Clean up animation
-            animatedLayers.value.delete(animationId);
+            animatedLayers.delete(animationId);
         }
     };
 
@@ -561,7 +581,7 @@ const animateComplexBorderDrawing = (layer, features, duration = 1800) => {
         .toString(36)
         .substr(2, 9)}`;
 
-    animatedLayers.value.add(animationId);
+    animatedLayers.add(animationId);
 
     const animate = () => {
         const elapsed = Date.now() - startTime;
@@ -599,7 +619,7 @@ const animateComplexBorderDrawing = (layer, features, duration = 1800) => {
         });
 
         // Continue or finish
-        if (progress < 1 && animatedLayers.value.has(animationId)) {
+        if (progress < 1 && animatedLayers.has(animationId)) {
             requestAnimationFrame(animate);
         } else {
             // Set final solid style
@@ -621,7 +641,7 @@ const animateComplexBorderDrawing = (layer, features, duration = 1800) => {
                 }
             });
 
-            animatedLayers.value.delete(animationId);
+            animatedLayers.delete(animationId);
         }
     };
 
@@ -630,7 +650,7 @@ const animateComplexBorderDrawing = (layer, features, duration = 1800) => {
 
 // Stop all border animations
 const stopAllBorderAnimations = () => {
-    animatedLayers.value.clear();
+    animatedLayers.clear();
 };
 
 // Trigger border animation for all visible layers (for testing)
@@ -748,6 +768,9 @@ const loadDistrictsLayer = () => {
 
         // Add click handler for districts
         map.value.on("click", (event) => {
+            if (props.customAreaDrawing) {
+                return;
+            }
             const feature = map.value.forEachFeatureAtPixel(
                 event.pixel,
                 (feature, layer) => {
@@ -803,6 +826,9 @@ const refreshDistrictsLayer = () => {
 
 // Handle map clicks
 const handleMapClick = (event) => {
+    if (props.customAreaDrawing) {
+        return;
+    }
     const coordinate = event.coordinate;
     const feature = map.value.forEachFeatureAtPixel(
         event.pixel,
@@ -837,6 +863,9 @@ const handleMapClick = (event) => {
 
 // Handle area click for selection tool updates
 const handleAreaClick = (event) => {
+    if (props.customAreaDrawing) {
+        return;
+    }
     const features = map.value.getFeaturesAtPixel(event.pixel);
 
     if (features.length > 0) {
@@ -1022,11 +1051,14 @@ const updateErosionData = (data) => {
     // For now, we'll simulate with vector data
 
     if (data.tiles) {
+        const maxZoomAvailable = parseMaxZoom(data.max_zoom);
         // Add raster layer for erosion data
         const erosionLayer = new TileLayer({
             source: new XYZ({
                 url: data.tiles,
                 crossOrigin: "anonymous",
+                minZoom: 6,
+                maxZoom: maxZoomAvailable,
             }),
             opacity: 1.0,
         });
@@ -1057,12 +1089,18 @@ const loadDetailedErosionData = async (area) => {
             return null;
         }
 
-        const areaType = area.region_id ? "district" : "region";
-        const areaId = area.id;
+        const areaType =
+            area.area_type ??
+            (area.region_id ? "district" : area.type === "region" ? "region" : "district");
+        const areaId = area.id ?? area.area_id ?? 0;
+        const areaCacheKey =
+            areaType === "custom"
+                ? area.geometry_hash || area.cacheKey || "custom"
+                : areaId;
         const endYear = periodEndYear.value || new Date().getFullYear();
-        const layerKey = buildDetailedLayerKey(
+        let layerKey = buildDetailedLayerKey(
             areaType,
-            areaId,
+            areaCacheKey,
             periodStartYear.value,
             endYear
         );
@@ -1077,15 +1115,35 @@ const loadDetailedErosionData = async (area) => {
         //   return
         // }
 
+        const requestPayload = {
+            area_type: areaType,
+            start_year: periodStartYear.value,
+            end_year: endYear,
+        };
+
+        if (areaType === "custom") {
+            requestPayload.area_id = 0;
+            requestPayload.geometry = area.geometry || area.geometry_snapshot || null;
+        } else {
+            requestPayload.area_id = areaId;
+        }
+
+        if (areaType === "custom" && !requestPayload.geometry) {
+            console.warn("Custom area missing geometry for tile request.");
+            emit("layer-warning", {
+                type: "error",
+                title: "Custom Area Geometry Missing",
+                message:
+                    "Unable to request tiles for the custom area because its geometry is unavailable.",
+                details: "Please redraw the polygon and try again.",
+            });
+            return null;
+        }
+
         // Ask backend for availability (this queues generation when needed)
         const availabilityResponse = await axios.post(
             "/api/erosion/check-availability",
-            {
-                area_type: areaType,
-                area_id: areaId,
-                start_year: periodStartYear.value,
-                end_year: endYear,
-            }
+            requestPayload
         );
 
         const availability = availabilityResponse.data || {};
@@ -1097,14 +1155,34 @@ const loadDetailedErosionData = async (area) => {
             availability.period_label || fallbackLabel;
         const status = availability.status;
         const taskId = availability.task_id;
+        const maxZoomAvailable = parseMaxZoom(availability.max_zoom);
 
         console.log(`Availability for ${areaLabel}:`, availability);
 
+        if (areaType === "custom" && availability.geometry_hash) {
+            area.geometry_hash = availability.geometry_hash;
+        }
+
+        const resolvedLayerKey =
+            areaType === "custom" && availability.geometry_hash
+                ? buildDetailedLayerKey(
+                      areaType,
+                      availability.geometry_hash,
+                      periodStartYear.value,
+                      endYear
+                  )
+                : layerKey;
+
         if (status === "available" && availability.tiles_url) {
+            // Stop any polling for this layer (in case it was polling)
+            stopTilePolling(resolvedLayerKey);
+            
             const tileLayer = new TileLayer({
                 source: new XYZ({
                     url: availability.tiles_url,
                     crossOrigin: "anonymous",
+                    minZoom: 6,
+                    maxZoom: maxZoomAvailable,
                 }),
                 opacity: 1.0,
                 zIndex: 8,
@@ -1112,7 +1190,7 @@ const loadDetailedErosionData = async (area) => {
                 maxZoom: 18,
             });
 
-            registerDetailedLayer(layerKey, tileLayer);
+            registerDetailedLayer(resolvedLayerKey, tileLayer);
             map.value.addLayer(tileLayer);
             console.log(
                 `✓ Added precomputed erosion tile layer (${periodLabelFromResponse}):`,
@@ -1126,7 +1204,14 @@ const loadDetailedErosionData = async (area) => {
                 statistics: availability.statistics || null,
             });
 
-            return layerKey;
+            emit("layer-warning", {
+                type: "success",
+                title: "Erosion Tiles Ready",
+                message: `${areaLabel} (${periodLabelFromResponse}) tiles are now available.`,
+                details: "Tiles have been loaded on the map.",
+            });
+
+            return resolvedLayerKey;
         }
 
         if (status === "queued" || status === "processing") {
@@ -1138,9 +1223,19 @@ const loadDetailedErosionData = async (area) => {
                         : "Erosion Tiles Processing",
                 message: `${areaLabel} (${periodLabelFromResponse}) tiles are being prepared.`,
                 details: taskId
-                    ? `Fresh erosion tiles are being generated. Task ID: ${taskId}.`
-                    : "Fresh erosion tiles are being generated and should be ready within about 5–10 minutes.",
+                    ? `Fresh erosion tiles are being generated. Task ID: ${taskId}. Checking automatically...`
+                    : "Fresh erosion tiles are being generated and should be ready within about 5–10 minutes. Checking automatically...",
             });
+            
+            // Start polling for tile availability
+            startTilePolling(
+                area,
+                resolvedLayerKey,
+                areaType,
+                areaId,
+                areaType === "custom" ? requestPayload.geometry : null
+            );
+            
             return null;
         }
 
@@ -1182,33 +1277,284 @@ const loadDetailedErosionData = async (area) => {
     }
 };
 
+// Poll for tile availability when tiles are queued or processing
+const startTilePolling = (area, layerKey, areaType, areaId, customGeometry = null) => {
+    // Stop any existing polling for this layer
+    stopTilePolling(layerKey);
+
+     if (areaType === "custom" && !customGeometry) {
+         console.warn("Custom area polling aborted: missing geometry.");
+         return;
+     }
+    
+    const areaLabel = area.name_en || area.name || "selected area";
+    const endYear = periodEndYear.value || new Date().getFullYear();
+    let pollCount = 0;
+    const maxPolls = 120; // Poll for up to 10 minutes (120 * 5 seconds)
+    const pollInterval = 5000; // Poll every 5 seconds
+    
+    const pollIntervalId = setInterval(async () => {
+        pollCount++;
+        
+        try {
+            const pollPayload = {
+                area_type: areaType,
+                area_id: areaId,
+                start_year: periodStartYear.value,
+                end_year: endYear,
+            };
+
+            if (areaType === "custom" && customGeometry) {
+                pollPayload.geometry = customGeometry;
+            }
+
+            const availabilityResponse = await axios.post(
+                "/api/erosion/check-availability",
+                pollPayload
+            );
+            
+            const availability = availabilityResponse.data || {};
+            const status = availability.status;
+            const maxZoomAvailable = parseMaxZoom(availability.max_zoom);
+            
+            if (status === "available" && availability.tiles_url) {
+                // Tiles are ready! Load them
+                stopTilePolling(layerKey);
+                
+                const fallbackLabel =
+                    periodStartYear.value === endYear
+                        ? `${periodStartYear.value}`
+                        : `${periodStartYear.value} - ${endYear}`;
+                const periodLabelFromResponse =
+                    availability.period_label || fallbackLabel;
+                
+                const tileLayer = new TileLayer({
+                    source: new XYZ({
+                        url: availability.tiles_url,
+                        crossOrigin: "anonymous",
+                        minZoom: 6,
+                        maxZoom: maxZoomAvailable,
+                    }),
+                    opacity: 1.0,
+                    zIndex: 8,
+                    minZoom: 6,
+                    maxZoom: 18,
+                });
+                
+                registerDetailedLayer(layerKey, tileLayer);
+                map.value.addLayer(tileLayer);
+                console.log(
+                    `✓ Auto-loaded precomputed erosion tile layer (${periodLabelFromResponse}):`,
+                    availability.tiles_url
+                );
+                
+                emit("detailed-erosion-loaded", {
+                    areaId,
+                    areaName: areaLabel,
+                    cellCount: null,
+                    statistics: availability.statistics || null,
+                });
+                
+                emit("layer-warning", {
+                    type: "success",
+                    title: "Erosion Tiles Ready",
+                    message: `${areaLabel} (${periodLabelFromResponse}) tiles are now available.`,
+                    details: "Tiles have been automatically loaded on the map.",
+                });
+            } else if (status === "failed" || status === "error") {
+                // Task failed, stop polling
+                stopTilePolling(layerKey);
+                emit("layer-warning", {
+                    type: "error",
+                    title: "Erosion Tiles Unavailable",
+                    message: `Failed to generate erosion tiles for ${areaLabel}.`,
+                    details:
+                        availability.error ||
+                        availability.error_message ||
+                        "Please try again later.",
+                });
+            } else if (pollCount >= maxPolls) {
+                // Max polling time reached
+                stopTilePolling(layerKey);
+                emit("layer-warning", {
+                    type: "warning",
+                    title: "Tile Generation Taking Longer",
+                    message: `Tile generation for ${areaLabel} is taking longer than expected.`,
+                    details: "Please check back later or try clicking Apply again.",
+                });
+            }
+        } catch (error) {
+            console.error("Error polling for tile availability:", error);
+            // Continue polling on error (might be temporary network issue)
+            if (pollCount >= maxPolls) {
+                stopTilePolling(layerKey);
+            }
+        }
+    }, pollInterval);
+    
+    tilePollingIntervals[layerKey] = pollIntervalId;
+    console.log(`Started polling for tiles: ${layerKey}`);
+};
+
+// Stop polling for a specific layer
+const stopTilePolling = (layerKey) => {
+    const intervalId = tilePollingIntervals[layerKey];
+    if (intervalId) {
+        clearInterval(intervalId);
+        delete tilePollingIntervals[layerKey];
+        console.log(`Stopped polling for tiles: ${layerKey}`);
+    }
+};
+
+// Stop all polling
+const stopAllTilePolling = () => {
+    Object.keys(tilePollingIntervals).forEach((layerKey) => {
+        const intervalId = tilePollingIntervals[layerKey];
+        if (intervalId) {
+            clearInterval(intervalId);
+            console.log(`Stopped polling for tiles: ${layerKey}`);
+        }
+        delete tilePollingIntervals[layerKey];
+    });
+};
+
+// Capture the current map view as a PNG data URL
+const captureMapAsImage = () => {
+    return new Promise((resolve, reject) => {
+        if (!map.value) {
+            reject(new Error("Map is not ready yet."));
+            return;
+        }
+
+        const size = map.value.getSize();
+        if (!size) {
+            reject(new Error("Map size is unavailable."));
+            return;
+        }
+
+        map.value.once("rendercomplete", () => {
+            try {
+                const mapCanvas = document.createElement("canvas");
+                mapCanvas.width = size[0];
+                mapCanvas.height = size[1];
+                const mapContext = mapCanvas.getContext("2d");
+
+                const viewport = map.value.getViewport();
+                let canvases = [];
+                if (viewport && typeof viewport.querySelectorAll === "function") {
+                    canvases = Array.from(viewport.querySelectorAll("canvas"));
+                }
+                if (!canvases.length) {
+                    canvases = Array.from(
+                        document.querySelectorAll(".ol-layer canvas, canvas.ol-layer")
+                    );
+                }
+
+                canvases.forEach((canvas) => {
+                    if (
+                        !canvas ||
+                        canvas.width === 0 ||
+                        canvas.height === 0 ||
+                        canvas.style.display === "none"
+                    ) {
+                        return;
+                    }
+
+                    const opacity = canvas.parentNode?.style?.opacity || canvas.style.opacity;
+                    const display = canvas.parentNode?.style?.display || canvas.style.display;
+                    if (display === "none") {
+                        return;
+                    }
+
+                    mapContext.globalAlpha = opacity ? Number(opacity) : 1;
+
+                    const transform = canvas.style.transform;
+                    if (transform) {
+                        const matrixValues = transform
+                            .match(/^matrix\(([^]*)\)$/)?.[1]
+                            ?.split(",")
+                            .map(Number);
+                        if (matrixValues && matrixValues.length === 6) {
+                            mapContext.setTransform(
+                                matrixValues[0],
+                                matrixValues[1],
+                                matrixValues[2],
+                                matrixValues[3],
+                                matrixValues[4],
+                                matrixValues[5]
+                            );
+                        }
+                    } else {
+                        mapContext.setTransform(1, 0, 0, 1, 0, 0);
+                    }
+
+                    const backgroundColor = canvas.parentNode?.style?.backgroundColor;
+                    if (backgroundColor) {
+                        mapContext.fillStyle = backgroundColor;
+                        mapContext.fillRect(0, 0, canvas.width, canvas.height);
+                    }
+
+                    mapContext.drawImage(canvas, 0, 0);
+                });
+
+                mapContext.globalAlpha = 1;
+                mapContext.setTransform(1, 0, 0, 1, 0, 0);
+
+                resolve({
+                    dataUrl: mapCanvas.toDataURL("image/png"),
+                    width: mapCanvas.width,
+                    height: mapCanvas.height,
+                });
+            } catch (error) {
+                reject(error);
+            }
+        });
+
+        map.value.renderSync();
+    });
+};
+
 // Clip geometry to country bounds
 const clipGeometryToCountryBounds = async (geometry) => {
     if (!topoJsonLayer.value) return geometry;
 
     try {
         const turf = await import("@turf/turf");
-        const source = topoJsonLayer.value.getSource();
-        const features = source.getFeatures();
-
-        if (features.length === 0) return geometry;
-
-        // Get country boundary as a union of all districts
         const geojsonFormat = new GeoJSON();
-        let countryBoundary = null;
+        let countryBoundary = countryBoundaryCache.value;
 
-        for (const feature of features) {
-            const geoJsonFeature = geojsonFormat.writeFeatureObject(feature, {
-                featureProjection: "EPSG:3857",
-                dataProjection: "EPSG:4326",
-            });
+        if (!countryBoundary) {
+            const source = topoJsonLayer.value.getSource();
+            const features = source
+                ? source.getFeatures().filter((feature) => feature?.getGeometry())
+                : [];
+
+            if (!features.length) {
+                return geometry;
+            }
+
+            for (const feature of features) {
+                const geoJsonFeature = geojsonFormat.writeFeatureObject(feature, {
+                    featureProjection: "EPSG:3857",
+                    dataProjection: "EPSG:4326",
+                });
+
+                if (!geoJsonFeature?.geometry) {
+                    continue;
+                }
+
+                if (!countryBoundary) {
+                    countryBoundary = geoJsonFeature;
+                } else {
+                    countryBoundary = turf.union(countryBoundary, geoJsonFeature);
+                }
+            }
 
             if (!countryBoundary) {
-                countryBoundary = geoJsonFeature;
-            } else {
-                // Union with existing boundary
-                countryBoundary = turf.union(countryBoundary, geoJsonFeature);
+                return geometry;
             }
+
+            countryBoundaryCache.value = countryBoundary;
         }
 
         // Convert drawn geometry to GeoJSON
@@ -1729,12 +2075,13 @@ const fetchAndRenderLayer = async (
 
         // If backend returns tiles URL, use tile layer
         if (layerData.tiles) {
+            const maxZoomAvailable = parseMaxZoom(layerData.max_zoom);
             const layer = new TileLayer({
                 source: new XYZ({
                     url: layerData.tiles,
                     crossOrigin: "anonymous",
                     minZoom: 6, // Precomputed tiles are now available from zoom level 6
-                    maxZoom: 12,
+                    maxZoom: maxZoomAvailable,
                 }),
                 opacity: opacity,
                 zIndex: 8, // Below district borders (15) and selection layers (20)
@@ -3179,6 +3526,96 @@ const clearAreaHighlights = () => {
     }
 };
 
+// Custom polygon drawing methods
+const enableCustomPolygonDrawing = () => {
+    if (!map.value) return;
+    
+    // Remove existing draw interaction if any
+    if (customPolygonDraw.value) {
+        map.value.removeInteraction(customPolygonDraw.value);
+    }
+    
+    // Create a new vector source and layer for custom polygon
+    if (!customPolygonLayer.value) {
+        const customPolygonSource = new VectorSource();
+        customPolygonLayer.value = new VectorLayer({
+            source: customPolygonSource,
+            style: new Style({
+                fill: new Fill({
+                    color: 'rgba(59, 130, 246, 0.2)', // Blue fill with transparency
+                }),
+                stroke: new Stroke({
+                    color: '#3b82f6', // Blue stroke
+                    width: 2,
+                }),
+            }),
+        });
+        map.value.addLayer(customPolygonLayer.value);
+    }
+    
+    // Create draw interaction for polygon
+    customPolygonDraw.value = new Draw({
+        source: customPolygonLayer.value.getSource(),
+        type: 'Polygon',
+    });
+    
+    // Handle when polygon drawing is complete
+    customPolygonDraw.value.on('drawend', async (event) => {
+        const geometry = event.feature.getGeometry();
+        
+        // Clip geometry to Tajikistan boundaries
+        const clippedGeometry = await clipGeometryToCountryBounds(geometry);
+        
+        if (!clippedGeometry) {
+            console.warn('Polygon is outside Tajikistan boundaries');
+            // Remove the feature if it's outside boundaries
+            customPolygonLayer.value.getSource().removeFeature(event.feature);
+            return;
+        }
+        
+        // Replace the feature geometry with clipped version
+        event.feature.setGeometry(clippedGeometry);
+        
+        // Convert to GeoJSON
+        const geojsonFormat = new GeoJSON();
+        const geoJson = geojsonFormat.writeGeometryObject(clippedGeometry, {
+            featureProjection: 'EPSG:3857',
+            dataProjection: 'EPSG:4326',
+        });
+        
+        // Emit the drawn polygon
+        emit('custom-polygon-drawn', geoJson);
+    });
+    
+    map.value.addInteraction(customPolygonDraw.value);
+    console.log('Custom polygon drawing enabled');
+};
+
+const disableCustomPolygonDrawing = () => {
+    if (!map.value) return;
+    
+    if (customPolygonDraw.value) {
+        map.value.removeInteraction(customPolygonDraw.value);
+        customPolygonDraw.value = null;
+    }
+    
+    // Clear the custom polygon layer
+    if (customPolygonLayer.value) {
+        customPolygonLayer.value.getSource().clear();
+    }
+    
+    console.log('Custom polygon drawing disabled');
+};
+
+// Watch for custom area drawing prop changes
+watch(() => props.customAreaDrawing, (isActive) => {
+    if (isActive) {
+        enableCustomPolygonDrawing();
+    } else {
+        disableCustomPolygonDrawing();
+    }
+});
+
 defineExpose({
     setBaseMapType: applyBaseMapType,
     getBaseMapType: () => currentBaseMapType.value,
@@ -3207,6 +3644,10 @@ defineExpose({
     highlightSelectedAreas,
     clearAreaHighlights,
     getCountryBoundary: () => tajikistanBoundaryFeatureCollection.value,
+    // Custom polygon drawing methods
+    enableCustomPolygonDrawing,
+    disableCustomPolygonDrawing,
+    captureMapAsImage,
 });
 
 // Lifecycle
@@ -3221,6 +3662,9 @@ onMounted(() => {
 onUnmounted(() => {
     // Stop all border animations
     stopAllBorderAnimations();
+    
+    // Stop all tile polling
+    stopAllTilePolling();
 
     // Clean up map and resize handler
     if (map.value) {

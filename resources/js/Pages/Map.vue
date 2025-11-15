@@ -66,6 +66,7 @@
                         @region-change="handleRegionChange"
                         @district-change="handleDistrictChange"
                         @areas-change="handleAreasChange"
+                        @custom-area-toggle="handleCustomAreaToggle"
                     />
 
                     <!-- Time Series Slider -->
@@ -108,6 +109,14 @@
                                 Clear Selection
                             </button>
                         </div>
+                        <button
+                            @click="exportStatisticsReport"
+                            :disabled="isExporting || !hasStatistics"
+                            class="w-full px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                            <span v-if="isExporting">Preparing PDF...</span>
+                            <span v-else>Export Report (PDF)</span>
+                        </button>
                         <p
                             v-if="needsApply && canApply"
                             class="text-xs text-amber-600 bg-amber-100 border border-amber-200 rounded-md px-3 py-2"
@@ -219,6 +228,7 @@
                         :visible-layers="visibleLayers"
                         :analysis-trigger="analysisTrigger"
                         :custom-layers="customLayerDefinitions"
+                        :custom-area-drawing="customAreaDrawing"
                         @map-ready="handleMapReady"
                         @statistics-updated="handleStatisticsUpdated"
                         @district-clicked="handleDistrictClicked"
@@ -228,6 +238,7 @@
                         @area-replace-selection="handleAreaReplaceSelection"
                         @boundary-violation="handleBoundaryViolation"
                         @layer-warning="handleLayerWarning"
+                        @custom-polygon-drawn="handleCustomPolygonDrawn"
                     />
 
                     <!-- Map Legend -->
@@ -298,7 +309,7 @@
                     </button>
 
                     <!-- Scrollable Content Area -->
-                    <div class="flex-1 overflow-y-auto p-6 pt-8">
+                    <div ref="statisticsPanelRef" class="flex-1 overflow-y-auto p-6 pt-8">
                         <!-- Comprehensive Statistics Panel -->
                         <StatisticsPanel
                             :selected-area="selectedArea"
@@ -475,7 +486,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import axios from "axios";
 import { router } from "@inertiajs/vue3";
 import MapView from "@/Components/Map/MapView.vue";
@@ -507,6 +518,8 @@ const currentEndYear = computed(() => currentPeriod.value.endYear);
 const currentPeriodLabel = computed(() => currentPeriod.value.label);
 const selectedArea = ref(null);
 const selectedAreas = ref([]); // Multiple selected areas
+const customAreaDrawing = ref(false);
+const customAreaGeometry = ref(null);
 const visibleLayers = ref([]); // Start with no layers selected (country-wide default)
 const showLabels = ref(true); // Show map labels by default
 const mapInstance = ref(null);
@@ -515,7 +528,12 @@ const baseMapOptions = ref([{ id: "osm", label: "OpenStreetMap" }]);
 const selectedBaseMapType = ref("osm");
 const statistics = ref(null);
 const areaStatistics = ref([]);
+const hasStatistics = computed(
+    () => Boolean(statistics.value) || (Array.isArray(areaStatistics.value) && areaStatistics.value.length > 0)
+);
 const timeSeriesData = ref([]);
+const statisticsPanelRef = ref(null);
+const isExporting = ref(false);
 const loading = ref(false);
 const progress = ref(0);
 const loadingMessage = ref("");
@@ -527,6 +545,11 @@ const needsApply = ref(true);
 // Toast notifications (stacked)
 const toasts = ref([]);
 let toastCounter = 0;
+
+const delay = (ms = 0) =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 
 // Panel state
 const leftSidebarVisible = ref(true);
@@ -916,6 +939,37 @@ const applySelection = async () => {
         const primaryArea = analysisAreas[0] || null;
         selectedArea.value = primaryArea ? applyDisplayName(primaryArea) : null;
 
+        const customArea = analysisAreas.find(
+            (area) => (area.area_type ?? area.type) === "custom"
+        );
+
+        if (customArea) {
+            const areaWithGeometry = {
+                ...customArea,
+                geometry: customArea.geometry || customAreaGeometry.value || null,
+            };
+
+            if (!areaWithGeometry.geometry) {
+                showToast(
+                    "error",
+                    "Custom Area Missing Geometry",
+                    "Please draw a polygon before running the analysis.",
+                    "",
+                    { duration: 7000 }
+                );
+                loading.value = false;
+                progress.value = 0;
+                loadingMessage.value = "";
+                return;
+            }
+
+            applyDisplayName(areaWithGeometry);
+
+            await computeStatisticsForCustomArea(areaWithGeometry);
+
+            return;
+        }
+
         loading.value = true;
         progress.value = 0;
         loadingMessage.value = "Calculating RUSLE statistics...";
@@ -981,6 +1035,499 @@ const applySelection = async () => {
         } else {
             mapView.value.clearAreaHighlights();
         }
+    }
+};
+
+const waitForStatisticsPanelRender = async (panelEl, timeoutMs = 4000) => {
+    if (!panelEl) {
+        return false;
+    }
+
+    const start = performance.now();
+    while (performance.now() - start < timeoutMs) {
+        await nextTick();
+
+        const contentReady =
+            (panelEl.textContent || "").trim().length > 0 ||
+            panelEl.querySelector("[data-statistics-card], table, .chart-container");
+
+        const canvases = panelEl.querySelectorAll("canvas");
+        const canvasesReady =
+            canvases.length === 0 ||
+            Array.from(canvases).every(
+                (canvas) => canvas.width > 0 && canvas.height > 0
+            );
+
+        if (panelEl.offsetHeight > 0 && contentReady && canvasesReady) {
+            return true;
+        }
+
+        await delay(150);
+    }
+
+    console.warn("Statistics panel did not finish rendering before export.");
+    return false;
+};
+
+const exportStatisticsReport = async () => {
+    if (isExporting.value) {
+        return;
+    }
+
+    if (!hasStatistics.value) {
+        showToast(
+            "warning",
+            "Nothing to export",
+            "Run a calculation first to generate statistics before exporting the report."
+        );
+        return;
+    }
+
+    if (!mapView.value) {
+        showToast("error", "Export Failed", "The map is not ready yet. Please try again in a moment.");
+        return;
+    }
+
+    let restoreBottomPanel = false;
+    try {
+        isExporting.value = true;
+
+        if (!bottomPanelVisible.value) {
+            bottomPanelVisible.value = true;
+            restoreBottomPanel = true;
+            await nextTick();
+            await delay(300);
+        }
+
+        await nextTick();
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+        const [{ jsPDF }, html2canvasModule, autoTableModule] = await Promise.all([
+            import("jspdf"),
+            import("html2canvas"),
+            import("jspdf-autotable"),
+        ]);
+        const autoTable = autoTableModule.default ?? autoTableModule;
+        const html2canvas = html2canvasModule.default ?? html2canvasModule;
+
+        const mapCapture = await mapView.value.captureMapAsImage();
+        if (!mapCapture?.dataUrl) {
+            throw new Error("Unable to capture the map view.");
+        }
+
+        const panelEl = statisticsPanelRef.value;
+        if (!panelEl) {
+            throw new Error("Statistics panel is not available for export.");
+        }
+
+        await waitForStatisticsPanelRender(panelEl);
+
+        const captureStatisticsCanvas = async () => {
+            const cloneWrapper = document.createElement("div");
+            cloneWrapper.style.position = "fixed";
+            cloneWrapper.style.top = "-99999px";
+            cloneWrapper.style.left = "-99999px";
+            cloneWrapper.style.width = "1400px";
+            cloneWrapper.style.padding = "24px";
+            cloneWrapper.style.background = "#ffffff";
+            cloneWrapper.style.zIndex = "-1";
+            cloneWrapper.style.opacity = "0";
+            cloneWrapper.style.pointerEvents = "none";
+
+            const clonedPanel = panelEl.cloneNode(true);
+            clonedPanel.style.width = "100%";
+            clonedPanel.style.maxWidth = "100%";
+            cloneWrapper.appendChild(clonedPanel);
+            document.body.appendChild(cloneWrapper);
+
+            const originalCanvases = panelEl.querySelectorAll("canvas");
+            const clonedCanvases = clonedPanel.querySelectorAll("canvas");
+            clonedCanvases.forEach((canvas, index) => {
+                const source = originalCanvases[index];
+                if (!source || !canvas) return;
+                const ctx = canvas.getContext("2d");
+                if (ctx) {
+                    ctx.drawImage(source, 0, 0, canvas.width || source.width, canvas.height || source.height);
+                }
+            });
+
+            await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+            const canvas = await html2canvas(cloneWrapper, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: "#ffffff",
+                scrollX: 0,
+                scrollY: 0,
+                width: cloneWrapper.offsetWidth,
+                height: cloneWrapper.scrollHeight,
+            });
+
+            document.body.removeChild(cloneWrapper);
+            return canvas;
+        };
+
+        const statsCanvas = await captureStatisticsCanvas();
+
+        const statsImageData = statsCanvas.toDataURL("image/png");
+
+        const doc = new jsPDF({
+            orientation: "landscape",
+            unit: "mm",
+            format: "a4",
+        });
+
+        const now = new Date();
+        const timestamp = new Intl.DateTimeFormat(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+        }).format(now);
+
+        const areaNames =
+            selectedAreas.value.length > 0
+                ? selectedAreas.value.map((area) => getLocalizedName(area)).join(", ")
+                : selectedArea.value
+                ? getLocalizedName(selectedArea.value)
+                : "Not specified";
+
+        const layerNames =
+            visibleLayers.value.length > 0
+                ? visibleLayers.value
+                      .map(
+                          (layerId) =>
+                              availableLayers.value.find((layer) => layer.id === layerId)?.name ||
+                              layerId
+                      )
+                      .join(", ")
+                : "Erosion (default)";
+
+        const baseMapLabel =
+            selectedBaseMapType.value === "terrain" ? "MapTiler Terrain" : "OpenStreetMap";
+
+        const title = `Tajikistan Soil Erosion Calculation – ${timestamp}`;
+        const infoLines = [
+            `Calculation Parameters:`,
+            `• Selected Area(s): ${areaNames}`,
+            `• Period: ${currentPeriodLabel.value}`,
+            `• Resolution: 1 km`,
+            `• Visible Layer(s): ${layerNames}`,
+            `• Base Map: ${baseMapLabel}`,
+        ];
+        let pageWidth = doc.internal.pageSize.getWidth();
+        let pageHeight = doc.internal.pageSize.getHeight();
+
+        const primaryStatistics =
+            statistics.value ||
+            areaStatistics.value.find((entry) => entry?.statistics)?.statistics ||
+            null;
+
+        const rusleFactorsRaw =
+            primaryStatistics?.rusleFactors ||
+            primaryStatistics?.rusle_factors ||
+            null;
+
+        const factorEntries = rusleFactorsRaw
+            ? Object.entries(rusleFactorsRaw)
+                  .map(([key, factor]) => {
+                      if (factor == null || typeof factor !== "object") {
+                          return null;
+                      }
+                      const label = factor.label || key.toUpperCase();
+                      const meanValue =
+                          factor.mean ?? factor.value ?? factor.default_value ?? null;
+                      const mean =
+                          typeof meanValue === "number"
+                              ? Number(meanValue).toFixed(
+                                    Math.abs(meanValue) >= 1 ? 2 : 3
+                                )
+                              : meanValue ?? "—";
+                      return {
+                          label,
+                          mean: mean.toString(),
+                          unit: factor.unit || "",
+                          description: factor.description || "",
+                      };
+                  })
+                  .filter(Boolean)
+            : [];
+
+        const margin = 15;
+        let cursorY = margin;
+
+        doc.setFontSize(16);
+        doc.text(title, margin, cursorY);
+
+        doc.setFontSize(11);
+        cursorY += 9;
+        infoLines.forEach((line) => {
+            doc.text(line, margin, cursorY);
+            cursorY += 6;
+        });
+
+        const formatStatValue = (value, digits = 2) => {
+            if (value === null || value === undefined) {
+                return "—";
+            }
+            const num = Number(value);
+            if (!Number.isFinite(num)) {
+                return "—";
+            }
+            const absolute = Math.abs(num);
+            const precision = absolute >= 100 ? 0 : absolute >= 10 ? 1 : digits;
+            return num.toFixed(precision);
+        };
+
+        const collectStatisticsTableRows = () => {
+            const rows = [];
+            const seen = new Set();
+
+            const pushRow = (entry) => {
+                if (!entry?.statistics) {
+                    return;
+                }
+
+                const stats = entry.statistics;
+                const rawName =
+                    entry.area?.display_name ||
+                    getLocalizedName(entry.area) ||
+                    entry.area?.name_en ||
+                    entry.area?.name ||
+                    entry.label ||
+                    "Area";
+
+                const name =
+                    typeof rawName === "string"
+                        ? rawName.trim()
+                        : String(rawName || "Area").trim();
+                if (seen.has(name)) {
+                    return;
+                }
+                seen.add(name);
+
+                const mean =
+                    stats.meanErosionRate ??
+                    stats.mean_erosion_rate ??
+                    stats.mean ??
+                    null;
+                const min =
+                    stats.minErosionRate ??
+                    stats.min_erosion_rate ??
+                    stats.min ??
+                    null;
+                const max =
+                    stats.maxErosionRate ??
+                    stats.max_erosion_rate ??
+                    stats.max ??
+                    null;
+                const rainfallTrend =
+                    stats.rainfallSlope ??
+                    stats.rainfall_slope ??
+                    stats.rainfallTrend ??
+                    stats.rainfall_trend ??
+                    null;
+                const rainfallCv =
+                    stats.rainfallCV ??
+                    stats.rainfall_cv ??
+                    stats.rainfallVariability ??
+                    stats.rainfall_variability ??
+                    null;
+
+                rows.push([
+                    name,
+                    formatStatValue(mean, 2),
+                    formatStatValue(min, 2),
+                    formatStatValue(max, 2),
+                    formatStatValue(rainfallTrend, 2),
+                    formatStatValue(rainfallCv, 1),
+                ]);
+            };
+
+            areaStatistics.value.forEach((entry) => {
+                pushRow(entry);
+                if (Array.isArray(entry?.components)) {
+                    entry.components.forEach((component) => pushRow(component));
+                }
+            });
+
+            if (!rows.length && statistics.value) {
+                pushRow({
+                    area: selectedArea.value,
+                    statistics: statistics.value,
+                    label: "Selected Area",
+                });
+            }
+
+            return rows;
+        };
+
+        const statisticsTableRows = collectStatisticsTableRows();
+
+        pageWidth = doc.internal.pageSize.getWidth();
+        pageHeight = doc.internal.pageSize.getHeight();
+        const maxMapWidth = pageWidth - margin * 2;
+        const mapAspectRatio =
+            mapCapture.width && mapCapture.height
+                ? mapCapture.width / mapCapture.height
+                : 1.5;
+
+        let mapWidth = maxMapWidth;
+        let mapHeight = mapWidth / mapAspectRatio;
+        const availableHeight = pageHeight - cursorY - margin;
+        if (mapHeight > availableHeight && availableHeight > margin) {
+            mapHeight = availableHeight;
+            mapWidth = mapHeight * mapAspectRatio;
+        }
+
+        const mapX = (pageWidth - mapWidth) / 2;
+        doc.addImage(mapCapture.dataUrl, "PNG", mapX, cursorY, mapWidth, mapHeight);
+
+        doc.addPage("landscape");
+        pageWidth = doc.internal.pageSize.getWidth();
+        pageHeight = doc.internal.pageSize.getHeight();
+        cursorY = margin;
+
+        if (statisticsTableRows.length) {
+            doc.setFontSize(12);
+            doc.text("Erosion Statistics Summary", margin, cursorY);
+            cursorY += 6;
+
+            autoTable(doc, {
+                startY: cursorY,
+                head: [
+                    [
+                        "Area",
+                        "Mean (t/ha/yr)",
+                        "Min",
+                        "Max",
+                        "Rainfall Trend (%)",
+                        "Rainfall CV (%)",
+                    ],
+                ],
+                body: statisticsTableRows,
+                margin: { left: margin, right: margin },
+                styles: {
+                    fontSize: 9,
+                    cellPadding: 2.5,
+                },
+                headStyles: {
+                    fillColor: [23, 63, 95],
+                    textColor: 255,
+                },
+                alternateRowStyles: {
+                    fillColor: [245, 248, 252],
+                },
+                theme: "striped",
+                didDrawPage: () => {
+                    pageWidth = doc.internal.pageSize.getWidth();
+                    pageHeight = doc.internal.pageSize.getHeight();
+                },
+            });
+
+            cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 8;
+        }
+
+        if (factorEntries.length) {
+            if (cursorY + 40 > pageHeight - margin) {
+                doc.addPage("landscape");
+                cursorY = margin;
+                pageWidth = doc.internal.pageSize.getWidth();
+                pageHeight = doc.internal.pageSize.getHeight();
+            }
+
+            doc.setFontSize(12);
+            doc.text("RUSLE Factors Summary", margin, cursorY);
+            cursorY += 7;
+
+            const columnX = [margin, margin + 45, margin + 85, margin + 120];
+            doc.setFontSize(10);
+            doc.text("Factor", columnX[0], cursorY);
+            doc.text("Mean", columnX[1], cursorY);
+            doc.text("Unit", columnX[2], cursorY);
+            doc.text("Description", columnX[3], cursorY);
+            cursorY += 5;
+
+            factorEntries.forEach((factor) => {
+                if (cursorY + 10 > pageHeight - margin) {
+                    doc.addPage("landscape");
+                    cursorY = margin;
+                    pageWidth = doc.internal.pageSize.getWidth();
+                    pageHeight = doc.internal.pageSize.getHeight();
+                    doc.setFontSize(10);
+                    doc.text("Factor", columnX[0], cursorY);
+                    doc.text("Mean", columnX[1], cursorY);
+                    doc.text("Unit", columnX[2], cursorY);
+                    doc.text("Description", columnX[3], cursorY);
+                    cursorY += 5;
+                }
+
+                doc.text(factor.label || "—", columnX[0], cursorY);
+                doc.text(factor.mean || "—", columnX[1], cursorY);
+                doc.text(factor.unit || "—", columnX[2], cursorY);
+
+                if (factor.description) {
+                    const descLines = doc.splitTextToSize(
+                        factor.description,
+                        pageWidth - columnX[3] - margin
+                    );
+                    doc.text(descLines, columnX[3], cursorY);
+                    cursorY += Math.max(6, descLines.length * 5);
+                } else {
+                    doc.text("—", columnX[3], cursorY);
+                    cursorY += 6;
+                }
+            });
+
+            cursorY += 4;
+        }
+
+        doc.addPage("landscape");
+        pageWidth = doc.internal.pageSize.getWidth();
+        pageHeight = doc.internal.pageSize.getHeight();
+
+        const statsAspectRatio =
+            statsCanvas.width && statsCanvas.height
+                ? statsCanvas.width / statsCanvas.height
+                : 1.5;
+        let statsWidth = pageWidth - margin * 2;
+        let statsHeight = statsWidth / statsAspectRatio;
+        const statsAvailableHeight = pageHeight - (margin + 10) - margin;
+        if (statsHeight > statsAvailableHeight) {
+            statsHeight = statsAvailableHeight;
+            statsWidth = statsHeight * statsAspectRatio;
+        }
+
+        doc.addImage(
+            statsImageData,
+            "PNG",
+            margin,
+            margin + 8,
+            statsWidth,
+            statsHeight
+        );
+
+        const filename = `soil-erosion-report_${now
+            .toISOString()
+            .replace(/[:.]/g, "-")}.pdf`;
+        doc.save(filename);
+
+        showToast(
+            "success",
+            "Export Ready",
+            "PDF report downloaded successfully."
+        );
+    } catch (error) {
+        console.error("Failed to export PDF:", error);
+        showToast(
+            "error",
+            "Export Failed",
+            error?.message || "An unexpected error occurred while generating the report."
+        );
+    } finally {
+        if (restoreBottomPanel) {
+            bottomPanelVisible.value = false;
+        }
+
+        isExporting.value = false;
     }
 };
 
@@ -1532,6 +2079,207 @@ const handleDistrictChange = (district) => {
 
     if (mapView.value && district) {
         mapView.value.highlightDistrict(district.name_en || district.name);
+    }
+};
+
+const handleCustomAreaToggle = (isActive) => {
+    customAreaDrawing.value = isActive;
+    
+    // Clear region/district selections when custom area is activated
+    if (isActive) {
+        selectedRegion.value = null;
+        selectedDistrict.value = null;
+        selectedArea.value = null;
+        selectedAreas.value = [];
+    }
+    
+    // Enable/disable polygon drawing in MapView
+    if (mapView.value) {
+        if (isActive) {
+            mapView.value.enableCustomPolygonDrawing();
+        } else {
+            mapView.value.disableCustomPolygonDrawing();
+            customAreaGeometry.value = null;
+        }
+    }
+};
+
+const handleCustomPolygonDrawn = (geometry) => {
+    if (!geometry) return;
+
+    customAreaGeometry.value = geometry;
+
+    const customArea = {
+        id: null,
+        type: "custom",
+        area_type: "custom",
+        name_en: "Custom Area",
+        name_tj: "Минтақаи фардӣ",
+        geometry,
+        cacheKey:
+            window.crypto?.randomUUID?.() ??
+            `custom-${Date.now().toString(36)}-${Math.random()
+                .toString(36)
+                .slice(2, 8)}`,
+    };
+
+    selectedArea.value = customArea;
+    selectedAreas.value = [customArea];
+
+    // Clear previous statistics until the user applies the new selection
+    statistics.value = null;
+    areaStatistics.value = [];
+    timeSeriesData.value = [];
+
+    markAnalysisDirty();
+
+    showToast(
+        "info",
+        "Custom Area Ready",
+        "Polygon captured. Click Apply Selection to run the analysis.",
+        "",
+        { duration: 6000 }
+    );
+};
+
+const computeStatisticsForCustomArea = async (customArea, options = {}) => {
+    const { suppressToast = false } = options;
+
+    if (!customArea || !customArea.geometry) return;
+    
+    loading.value = true;
+    progress.value = 0;
+    loadingMessage.value = "Calculating RUSLE statistics for custom area...";
+    
+    try {
+        const startYear = currentStartYear.value;
+        const endYear = currentEndYear.value;
+        
+        // Call compute endpoint with custom geometry
+        const response = await axios.post("/api/erosion/compute", {
+            area_type: 'custom',
+            area_id: null,
+            geometry: customArea.geometry, // GeoJSON geometry
+            start_year: startYear,
+            end_year: endYear,
+            period: "annual",
+        });
+        
+        const data = response.data || {};
+        
+        if (!data.success || !data.data || !data.data.statistics) {
+            throw new Error(data.error || "Failed to compute statistics");
+        }
+        
+        const stats = data.data.statistics;
+        const meanErosionRate = Number(stats.mean_erosion_rate ?? 0);
+        let rainfallSlope = Number(stats.rainfall_slope ?? 0);
+        let rainfallCV = Number(stats.rainfall_cv ?? 0);
+        
+        // Fetch rainfall statistics if not included
+        if ((!rainfallSlope && !rainfallCV) || rainfallSlope === 0) {
+            try {
+                const rainfallResponse = await axios.post("/api/erosion/layers/rainfall-slope", {
+                    area_type: 'custom',
+                    area_id: null,
+                    geometry: customArea.geometry,
+                    start_year: startYear,
+                    end_year: endYear,
+                });
+                
+                const rainfallData = rainfallResponse.data || {};
+                if (rainfallData.success && rainfallData.data) {
+                    rainfallSlope = Number(rainfallData.data.mean ?? rainfallSlope);
+                }
+                
+                const cvResponse = await axios.post("/api/erosion/layers/rainfall-cv", {
+                    area_type: 'custom',
+                    area_id: null,
+                    geometry: customArea.geometry,
+                    start_year: startYear,
+                    end_year: endYear,
+                });
+                
+                const cvData = cvResponse.data || {};
+                if (cvData.success && cvData.data) {
+                    rainfallCV = Number(cvData.data.mean ?? rainfallCV);
+                }
+            } catch (err) {
+                console.warn("Failed to fetch rainfall statistics:", err);
+            }
+        }
+        
+        // Create statistics payload similar to loadAreaStatistics
+        const createStatisticsPayload = (rawStats, slopeValue, cvValue) => {
+            const severityDistribution = Array.isArray(rawStats.severity_distribution)
+                ? rawStats.severity_distribution
+                : [];
+            const rusleFactors = rawStats.rusle_factors || {};
+            const topErodingAreas = Array.isArray(rawStats.top_eroding_areas)
+                ? rawStats.top_eroding_areas
+                : [];
+            const mean = Number(rawStats.mean_erosion_rate ?? 0);
+            
+            return {
+                meanErosionRate: mean,
+                minErosionRate: Number(rawStats.min_erosion_rate ?? rawStats.min_erosion ?? rawStats.min ?? 0),
+                maxErosionRate: Number(rawStats.max_erosion_rate ?? rawStats.max_erosion ?? rawStats.max ?? 0),
+                erosionCV: Number(rawStats.erosion_cv ?? rawStats.cv ?? 0),
+                bareSoilFrequency: Number(rawStats.bare_soil_frequency ?? 0),
+                sustainabilityFactor: Number(rawStats.sustainability_factor ?? 0),
+                rainfallSlope: slopeValue,
+                rainfallCV: cvValue,
+                riskLevel: getRiskLevel(mean),
+                severityDistribution,
+                rusleFactors,
+                topErodingAreas,
+            };
+        };
+        
+        const statisticsPayload = createStatisticsPayload(
+            stats,
+            rainfallSlope,
+            rainfallCV
+        );
+        
+        const periodLabel = startYear === endYear
+            ? `${startYear}`
+            : `${startYear}-${endYear}`;
+        
+        const areaEntry = {
+            area: applyDisplayName({ ...customArea }),
+            areaType: 'custom',
+            periodLabel,
+            statistics: statisticsPayload,
+        };
+        
+        areaStatistics.value = [areaEntry];
+        statistics.value = statisticsPayload;
+        
+        progress.value = 100;
+        loadingMessage.value = "Statistics calculated successfully";
+        
+        if (!suppressToast) {
+            showToast("success", "Statistics Calculated", 
+                `Erosion statistics calculated for custom area (${periodLabel})`,
+                `Mean erosion rate: ${statisticsPayload.meanErosionRate.toFixed(2)} t/ha/yr`,
+                { duration: 5000 }
+            );
+        }
+
+        needsApply.value = false;
+
+        return statisticsPayload;
+        
+    } catch (error) {
+        console.error("Failed to compute statistics for custom area:", error);
+        showToast("error", "Statistics Calculation Failed",
+            "Could not calculate statistics for custom area.",
+            error.message || "Unknown error occurred",
+            { duration: 10000 }
+        );
+    } finally {
+        loading.value = false;
     }
 };
 

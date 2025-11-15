@@ -3,7 +3,7 @@ Celery background tasks for erosion map generation
 """
 from celery_app import celery_app
 from raster_generator import ErosionRasterGenerator
-from tile_generator import MapTileGenerator
+from tile_generator import MapTileGenerator, DEFAULT_ZOOM_LEVELS
 from gee_service import gee_service
 from config import Config
 from rusle_config import build_config
@@ -49,6 +49,8 @@ def generate_erosion_map_task(
     config_overrides=None,
     user_id=None,
     defaults_version=None,
+    geometry_hash=None,
+    storage_key=None,
 ):
     """
     Background task to generate erosion map (GeoTIFF + tiles)
@@ -71,6 +73,7 @@ def generate_erosion_map_task(
         logger.info(f"=== Starting erosion map generation task ===")
         logger.info(f"Area: {area_type} {area_id}, Period: {period_label}")
         logger.info(f"Task ID: {self.request.id}")
+        tile_path_key = storage_key or f"{area_type}_{area_id}"
         
         # Notify Laravel that task has started
         try:
@@ -89,6 +92,10 @@ def generate_erosion_map_task(
                 callback_data['user_id'] = user_id
             if defaults_version is not None:
                 callback_data['defaults_version'] = defaults_version
+            if geometry_hash is not None:
+                callback_data['geometry_hash'] = geometry_hash
+            if tile_path_key:
+                callback_data['tile_path_key'] = tile_path_key
             _post_to_laravel('/api/erosion/task-started', callback_data)
             logger.info("Task started callback acknowledged by Laravel")
         except Exception as e:
@@ -130,12 +137,19 @@ def generate_erosion_map_task(
             logger.info("Applying custom RUSLE configuration overrides for task %s", self.request.id)
         raster_gen = ErosionRasterGenerator(rusle_config=rusle_config)
         metadata_defaults = {}
+        tile_zoom_levels = list(DEFAULT_ZOOM_LEVELS)
         if config_overrides:
             metadata_defaults['config_overrides'] = config_overrides
         if user_id is not None:
             metadata_defaults['user_id'] = user_id
         if defaults_version is not None:
             metadata_defaults['defaults_version'] = defaults_version
+        if geometry_hash is not None:
+            metadata_defaults['geometry_hash'] = geometry_hash
+        if tile_zoom_levels:
+            metadata_defaults['max_zoom'] = max(tile_zoom_levels)
+        if tile_path_key:
+            metadata_defaults['tile_path_key'] = tile_path_key
         if rusle_config.get("logging.include_config_snapshot", True):
             metadata_defaults['rusle_config'] = rusle_config.to_dict()
         metadata = {}
@@ -146,7 +160,8 @@ def generate_erosion_map_task(
             start_year,
             geometry,
             bbox,
-            end_year=end_year
+            end_year=end_year,
+            storage_key=tile_path_key
         )
         if metadata_defaults:
             merged_metadata = dict(metadata_defaults)
@@ -174,8 +189,10 @@ def generate_erosion_map_task(
             area_type,
             area_id,
             start_year,
+            zoom_levels=tile_zoom_levels,
             geometry_json=original_geometry,  # Pass geometry for boundary clipping
-            end_year=end_year
+            end_year=end_year,
+            storage_key=tile_path_key
         )
         
         logger.info(f"✓ Tiles generated: {tiles_path}")
@@ -201,12 +218,18 @@ def generate_erosion_map_task(
                 'statistics': statistics,
                 'metadata': metadata
             }
+            if tile_zoom_levels:
+                callback_data['max_zoom'] = max(tile_zoom_levels)
             if config_overrides:
                 callback_data['config_overrides'] = config_overrides
             if user_id is not None:
                 callback_data['user_id'] = user_id
             if defaults_version is not None:
                 callback_data['defaults_version'] = defaults_version
+            if geometry_hash is not None:
+                callback_data['geometry_hash'] = geometry_hash
+            if tile_path_key:
+                callback_data['tile_path_key'] = tile_path_key
             if rusle_config.get("logging.include_config_snapshot", True):
                 callback_data['rusle_config'] = rusle_config.to_dict()
             _post_to_laravel('/api/erosion/task-complete', callback_data, timeout=30)

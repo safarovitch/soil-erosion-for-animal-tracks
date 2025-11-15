@@ -25,15 +25,63 @@ class ErosionController extends Controller
      */
     public function compute(Request $request): JsonResponse
     {
-        $request->validate([
-            'area_type' => 'required|in:region,district,country',
-            'area_id' => 'required|integer',
-            'start_year' => 'required|integer|min:1993',
-            'end_year' => 'required|integer|min:1993|gte:start_year',
-            'period' => 'required|string|in:annual,monthly,seasonal',
-        ]);
+        // Custom geometry validation
+        if ($request->area_type === 'custom') {
+            $request->validate([
+                'area_type' => 'required|in:custom',
+                'geometry' => 'required|array',
+                'start_year' => 'required|integer|min:1993',
+                'end_year' => 'required|integer|min:1993|gte:start_year',
+                'period' => 'required|string|in:annual,monthly,seasonal',
+            ]);
+        } else {
+            $request->validate([
+                'area_type' => 'required|in:region,district,country',
+                'area_id' => 'required|integer',
+                'start_year' => 'required|integer|min:1993',
+                'end_year' => 'required|integer|min:1993|gte:start_year',
+                'period' => 'required|string|in:annual,monthly,seasonal',
+            ]);
+        }
 
         try {
+            $startYear = (int) $request->start_year;
+            $endYear = (int) $request->end_year;
+            $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
+            
+            // Handle custom geometry
+            if ($request->area_type === 'custom') {
+                if (!$this->geeService->isAvailable()) {
+                    return response()->json([
+                        'success' => false,
+                        'error' => 'Google Earth Engine is not configured. Please configure GEE credentials in the .env file.',
+                        'details' => 'Contact administrator to configure GEE_SERVICE_ACCOUNT_EMAIL, GEE_PROJECT_ID, and GEE_PRIVATE_KEY_PATH',
+                    ], 503);
+                }
+                
+                // Compute erosion data for custom geometry
+                $data = $this->geeService->computeErosionForCustomGeometry(
+                    $request->geometry,
+                    $startYear,
+                    $endYear,
+                    $request->period
+                );
+                
+                return response()->json([
+                    'success' => true,
+                    'data' => $data,
+                    'area' => [
+                        'type' => 'custom',
+                        'id' => null,
+                        'name' => 'Custom Area',
+                    ],
+                    'start_year' => $startYear,
+                    'end_year' => $endYear,
+                    'period' => $request->period,
+                    'period_label' => $periodLabel,
+                ]);
+            }
+            
             $area = $this->getArea($request->area_type, $request->area_id);
             if (!$area) {
                 return response()->json(['error' => 'Area not found'], 404);
@@ -47,10 +95,6 @@ class ErosionController extends Controller
                     'details' => 'Contact administrator to configure GEE_SERVICE_ACCOUNT_EMAIL, GEE_PROJECT_ID, and GEE_PRIVATE_KEY_PATH',
                 ], 503); // Service Unavailable
             }
-
-            $startYear = (int) $request->start_year;
-            $endYear = (int) $request->end_year;
-            $periodLabel = $startYear === $endYear ? (string) $startYear : "{$startYear}-{$endYear}";
 
             // Log the query for analytics
             $this->logQuery($request, $area, 'erosion_compute', [
@@ -574,6 +618,7 @@ class ErosionController extends Controller
                     'success' => true,
                     'data' => [
                         'tiles' => $map->tile_url,
+                        'max_zoom' => $map->metadata['max_zoom'] ?? 10,
                         'statistics' => $map->statistics,
                         'metadata' => $map->metadata
                     ],

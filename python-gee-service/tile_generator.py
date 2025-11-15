@@ -12,6 +12,8 @@ from affine import Affine
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ZOOM_LEVELS = [6, 7, 8, 9, 10, 11, 12]
+
 class MapTileGenerator:
     """Generate XYZ map tiles from erosion rasters"""
     
@@ -19,7 +21,7 @@ class MapTileGenerator:
         self.storage_path = Path(storage_path)
         self.tile_size = 256
         
-    def generate_tiles(self, geotiff_path, area_type, area_id, year, zoom_levels=None, geometry_json=None, end_year=None):
+        def generate_tiles(self, geotiff_path, area_type, area_id, year, zoom_levels=None, geometry_json=None, end_year=None, storage_key=None):
         """
         Generate XYZ map tiles from GeoTIFF or sampled data
         
@@ -42,9 +44,11 @@ class MapTileGenerator:
             logger.info(f"Generating map tiles for {area_type} {area_id}, period {period_label}")
             
             if zoom_levels is None:
-                zoom_levels = [6, 7, 8, 9, 10]
+                # Generate tiles down to district scale detail (≈30 m @ zoom 12)
+                zoom_levels = list(DEFAULT_ZOOM_LEVELS)
             
-            tiles_dir = self.storage_path / 'tiles' / f'{area_type}_{area_id}' / period_label
+            folder_key = storage_key or f'{area_type}_{area_id}'
+            tiles_dir = self.storage_path / 'tiles' / folder_key / period_label
             tiles_dir.mkdir(parents=True, exist_ok=True)
             
             geotiff_path = Path(geotiff_path)

@@ -32,7 +32,7 @@ class ErosionRasterGenerator:
             self.config = build_config(rusle_config)
         self.rusle_calc = RUSLECalculator(self.config)
         
-    def generate_geotiff(self, area_type, area_id, year, geometry_json, bbox=None, end_year=None):
+    def generate_geotiff(self, area_type, area_id, year, geometry_json, bbox=None, end_year=None, storage_key=None):
         """
         Generate GeoTIFF raster for erosion data
         
@@ -50,6 +50,7 @@ class ErosionRasterGenerator:
         try:
             start_year = year
             end_year = end_year if end_year is not None else year
+            calculation_year = end_year
             period_label = str(start_year) if end_year == start_year else f"{start_year}-{end_year}"
             
             logger.info(f"Generating GeoTIFF for {area_type} {area_id}, period {period_label}")
@@ -84,7 +85,7 @@ class ErosionRasterGenerator:
                     simplified_geom
                 )
                 rusle_result = self.rusle_calc.compute_rusle(
-                    start_year,
+                    calculation_year,
                     simplified_geom,
                     scale=scale,
                     compute_stats=True,
@@ -98,7 +99,7 @@ class ErosionRasterGenerator:
                 )
             else:
                 rusle_result = self.rusle_calc.compute_rusle(
-                    year, 
+                    calculation_year,
                     simplified_geom, 
                     scale=scale,
                     compute_stats=True
@@ -115,7 +116,8 @@ class ErosionRasterGenerator:
             statistics = rusle_result['statistics']
             
             # Define output path
-            output_dir = self.storage_path / 'geotiff' / f'{area_type}_{area_id}' / period_label
+            folder_key = storage_key or f'{area_type}_{area_id}'
+            output_dir = self.storage_path / 'geotiff' / folder_key / period_label
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / 'erosion.tif'
             
@@ -166,7 +168,7 @@ class ErosionRasterGenerator:
                 'erosion_class_breakdown': self.rusle_calc.compute_erosion_class_breakdown(
                     soil_loss_image,
                     original_geom,
-                    scale=max(100, scale)
+                    scale=max(1000, scale)
                 )
             }
             if self.rusle_calc.include_config_snapshot:

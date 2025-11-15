@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Services\ErosionTileService;
 use App\Models\Region;
 use App\Models\District;
+use App\Models\PrecomputedErosionMap;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 
 class ErosionTileController extends Controller
 {
@@ -22,12 +24,35 @@ class ErosionTileController extends Controller
      */
     public function serveTile($areaType, $areaId, $period, $z, $x, $y)
     {
+        $tileFolder = $this->resolveTileFolder($areaType, (string) $areaId);
+
         $tilePath = storage_path(
-            "rusle-tiles/tiles/{$areaType}_{$areaId}/{$period}/{$z}/{$x}/{$y}.png"
+            "rusle-tiles/tiles/{$tileFolder}/{$period}/{$z}/{$x}/{$y}.png"
         );
 
         if (!file_exists($tilePath)) {
-            return response()->json(['error' => 'Tile not found'], 404);
+            $fallbackTilePath = $this->resolveFallbackTilePath(
+                $areaType,
+                (string) $areaId,
+                $period,
+                (int) $z,
+                (int) $x,
+                (int) $y
+            );
+
+            if (!$fallbackTilePath) {
+                Log::warning('Requested tile missing', [
+                    'area_type' => $areaType,
+                    'area_id' => $areaId,
+                    'period' => $period,
+                    'z' => $z,
+                    'x' => $x,
+                    'y' => $y,
+                ]);
+                return response()->json(['error' => 'Tile not found'], 404);
+            }
+
+            $tilePath = $fallbackTilePath;
         }
 
         return response()->file($tilePath, [
@@ -45,8 +70,9 @@ class ErosionTileController extends Controller
         $maxYear = max($minYear, (int) config('earthengine.defaults.end_year', date('Y')));
 
         $validated = $request->validate([
-            'area_type' => 'required|in:region,district',
-            'area_id' => 'required|integer',
+            'area_type' => 'required|in:region,district,custom',
+            'area_id' => 'required_if:area_type,region,district|integer',
+            'geometry' => 'required_if:area_type,custom|array',
             'start_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
             'end_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
             'year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
@@ -72,15 +98,31 @@ class ErosionTileController extends Controller
             ], 422);
         }
 
-        $user = $request->user() ?? auth()->user();
+        $user = Auth::user();
 
-        $result = $this->service->getOrQueueMap(
-            $validated['area_type'],
-            $validated['area_id'],
-            $startYear,
-            $endYear,
-            $user
-        );
+        if ($validated['area_type'] === 'custom') {
+            if (empty($validated['geometry'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'error' => 'geometry is required for custom areas'
+                ], 422);
+            }
+
+            $result = $this->service->getOrQueueCustomMap(
+                $validated['geometry'],
+                $startYear,
+                $endYear,
+                $user
+            );
+        } else {
+            $result = $this->service->getOrQueueMap(
+                $validated['area_type'],
+                $validated['area_id'],
+                $startYear,
+                $endYear,
+                $user
+            );
+        }
 
         return response()->json($result);
     }
@@ -238,6 +280,144 @@ class ErosionTileController extends Controller
             'skipped' => count($skipped),
             'skipped_details' => $skipped
         ]);
+    }
+
+    private function resolveTileFolder(string $areaType, string $areaId): string
+    {
+        if (ctype_digit($areaId)) {
+            return "{$areaType}_{$areaId}";
+        }
+
+        if (str_starts_with($areaId, "{$areaType}_")) {
+            return $areaId;
+        }
+
+        return "{$areaType}_{$areaId}";
+    }
+
+    private function resolveFallbackTilePath(
+        string $areaType,
+        string $requestedAreaId,
+        string $requestedPeriod,
+        int $z,
+        int $x,
+        int $y
+    ): ?string {
+        [$startYear, $endYear] = $this->parsePeriodYears($requestedPeriod);
+        if ($startYear === null) {
+            return null;
+        }
+
+        $map = $this->findMapForFallback($areaType, $requestedAreaId, $startYear, $endYear);
+        if (!$map) {
+            return null;
+        }
+
+        $folder = $map->tile_storage_key;
+        $periodFolder = $map->period_label;
+        $fallbackPath = storage_path(
+            "rusle-tiles/tiles/{$folder}/{$periodFolder}/{$z}/{$x}/{$y}.png"
+        );
+
+        if (!file_exists($fallbackPath)) {
+            Log::warning('Fallback tile path still missing', [
+                'requested_area_id' => $requestedAreaId,
+                'resolved_folder' => $folder,
+                'requested_period' => $requestedPeriod,
+                'resolved_period' => $periodFolder,
+                'area_type' => $areaType,
+                'z' => $z,
+                'x' => $x,
+                'y' => $y,
+            ]);
+            return null;
+        }
+
+        Log::info('Serving tile via fallback path', [
+            'requested_area_id' => $requestedAreaId,
+            'resolved_folder' => $folder,
+            'requested_period' => $requestedPeriod,
+            'resolved_period' => $periodFolder,
+            'area_type' => $areaType,
+            'z' => $z,
+            'x' => $x,
+            'y' => $y,
+        ]);
+
+        return $fallbackPath;
+    }
+
+    private function parsePeriodYears(string $period): array
+    {
+        $clean = str_replace(' ', '', trim($period));
+
+        if (preg_match('/^(?<year>\d{4})$/', $clean, $matches)) {
+            $year = (int) $matches['year'];
+            return [$year, $year];
+        }
+
+        if (preg_match('/^(?<start>\d{4})-(?<end>\d{4})$/', $clean, $matches)) {
+            $startYear = (int) $matches['start'];
+            $endYear = (int) $matches['end'];
+            return [$startYear, max($endYear, $startYear)];
+        }
+
+        return [null, null];
+    }
+
+    private function findMapForFallback(string $areaType, string $areaId, ?int $startYear, ?int $endYear): ?PrecomputedErosionMap
+    {
+        if ($startYear === null) {
+            return null;
+        }
+
+        $query = PrecomputedErosionMap::query()
+            ->where('area_type', $areaType)
+            ->where('year', $startYear);
+
+        if ($this->looksLikeTilePathKey($areaType, $areaId)) {
+            $query->where('metadata->tile_path_key', $areaId);
+        } else {
+            $numericId = $this->extractNumericAreaId($areaType, $areaId);
+            if ($numericId === null) {
+                return null;
+            }
+            $query->where('area_id', $numericId);
+        }
+
+        if ($endYear !== null && $endYear !== $startYear) {
+            $query->where('metadata->period->end_year', $endYear);
+        }
+
+        return $query->first();
+    }
+
+    private function looksLikeTilePathKey(string $areaType, string $areaId): bool
+    {
+        $prefix = "{$areaType}_";
+        if (!str_starts_with($areaId, $prefix)) {
+            return false;
+        }
+
+        $suffix = substr($areaId, strlen($prefix));
+        return $suffix !== '' && !ctype_digit($suffix);
+    }
+
+    private function extractNumericAreaId(string $areaType, string $areaId): ?int
+    {
+        if (ctype_digit($areaId)) {
+            return (int) $areaId;
+        }
+
+        $prefix = "{$areaType}_";
+        if (str_starts_with($areaId, $prefix)) {
+            $numericPortion = substr($areaId, strlen($prefix));
+            if (ctype_digit($numericPortion)) {
+                return (int) $numericPortion;
+            }
+        }
+
+        return null;
     }
 }
 

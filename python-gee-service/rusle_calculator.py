@@ -50,7 +50,7 @@ class RUSLECalculator:
     
     LONG_TERM_R_START_YEAR = 1994
     LONG_TERM_R_END_YEAR = 2024  # Exclusive upper bound for filterDate
-    FLOW_ACC_GRID_SIZE = 300  # meters, matches HydroSHEDS 30 arc-second (~927m) res resampled to 300m exports
+    FLOW_ACC_GRID_SIZE = 1000  # meters, matches HydroSHEDS 30 arc-second (~927m) res resampled to 1000m (1km) resolution
     
     def __init__(self, config: Optional[Mapping[str, Any]] = None):
         if isinstance(config, RUSLEConfig):
@@ -625,7 +625,7 @@ class RUSLECalculator:
             logger.error(f"Failed to compute P-factor: {str(e)}")
             raise
     
-    def compute_rusle(self, year, geometry, scale=30, compute_stats=True, r_factor_image=None):
+    def compute_rusle(self, year, geometry, scale=1000, compute_stats=True, r_factor_image=None):
         """
         Compute full RUSLE erosion rate
         A = R * K * LS * C * P
@@ -634,7 +634,7 @@ class RUSLECalculator:
         Args:
             year: Year for computation
             geometry: Area geometry
-            scale: Resolution in meters (default 30m, use 100m+ for faster computation)
+            scale: Resolution in meters (default 1000m/1km)
             compute_stats: Whether to compute statistics (can be slow for large areas)
         """
         try:
@@ -801,7 +801,7 @@ class RUSLECalculator:
             logger.error(f"Failed to compute rainfall statistics: {str(e)}", exc_info=True)
             raise
     
-    def compute_erosion_class_breakdown(self, soil_loss_image, geometry, scale=100):
+    def compute_erosion_class_breakdown(self, soil_loss_image, geometry, scale=1000):
         """
         Compute percentage area for predefined erosion classes.
         Classes:

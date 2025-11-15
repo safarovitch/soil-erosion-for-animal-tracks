@@ -13,6 +13,9 @@ use Illuminate\Support\Arr;
 
 class ErosionTileService
 {
+    private const DEFAULT_GEOMETRY_HASH = '';
+    private const DEFAULT_MAX_ZOOM = 10;
+
     private string $pythonServiceUrl;
     private RusleConfigService $configService;
 
@@ -31,11 +34,13 @@ class ErosionTileService
      * @param int|null $endYear Inclusive end year (defaults to start year)
      * @return array Status and information about the map
      */
-    public function getOrQueueMap(string $areaType, int $areaId, int $startYear, ?int $endYear = null, ?User $user = null): array
+    public function getOrQueueMap(string $areaType, int $areaId, int $startYear, ?int $endYear = null, ?User $user = null, ?array $geometry = null): array
     {
         $startYear = (int) $startYear;
         $endYear = (int) ($endYear ?? $startYear);
         $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
+        $geometrySnapshot = $geometry ? $this->normaliseGeometry($geometry) : null;
+        $geometryHash = $this->computeGeometryHash($geometrySnapshot);
 
         $configContext = $this->resolveConfigContext($user);
         $userId = $configContext['user_id'];
@@ -50,6 +55,7 @@ class ErosionTileService
             'year' => $startYear,
             'user_id' => $userId,
             'config_hash' => $configHash,
+            'geometry_hash' => $geometryHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -59,6 +65,7 @@ class ErosionTileService
         $map = $mapQuery->first();
 
         if ($map && $map->isAvailable()) {
+            $maxZoom = (int) ($map->metadata['max_zoom'] ?? self::DEFAULT_MAX_ZOOM);
             $statistics = $this->enrichStatistics($map->statistics ?? null, $map->metadata ?? null);
             $components = $map->metadata['components'] ?? null;
             return [
@@ -70,6 +77,9 @@ class ErosionTileService
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'period_label' => $map->period_label,
+                'geometry_hash' => $map->geometry_hash,
+                'tile_path_key' => $map->tile_storage_key,
+                'max_zoom' => $maxZoom,
             ];
         }
 
@@ -80,6 +90,8 @@ class ErosionTileService
                  'start_year' => $startYear,
                  'end_year' => $endYear,
                 'period_label' => $map->period_label,
+                'geometry_hash' => $geometryHash,
+                'max_zoom' => (int) ($map->metadata['max_zoom'] ?? self::DEFAULT_MAX_ZOOM),
                 'message' => $map->status === 'queued' 
                     ? 'Map generation is queued' 
                     : 'Map is currently being generated'
@@ -89,39 +101,64 @@ class ErosionTileService
         if ($map && $map->status === 'failed') {
             // Retry failed computation
             Log::info("Retrying failed computation for {$areaType} {$areaId}, period {$periodLabel}");
-            return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext, $map);
+            return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext, $map, $geometrySnapshot, $geometryHash);
         }
 
         // Queue new computation
-        return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext);
+        return $this->queueComputation($areaType, $areaId, $startYear, $endYear, $configContext, null, $geometrySnapshot, $geometryHash);
+    }
+
+    public function getOrQueueCustomMap(array $geometry, int $startYear, ?int $endYear = null, ?User $user = null): array
+    {
+        return $this->getOrQueueMap('custom', 0, $startYear, $endYear, $user, $geometry);
     }
 
     /**
      * Queue a new computation task
      */
-    private function queueComputation(string $areaType, int $areaId, int $startYear, int $endYear, array $configContext, ?PrecomputedErosionMap $existingMap = null): array
+    private function queueComputation(
+        string $areaType,
+        int $areaId,
+        int $startYear,
+        int $endYear,
+        array $configContext,
+        ?PrecomputedErosionMap $existingMap = null,
+        ?array $geometrySnapshot = null,
+        ?string $geometryHash = null
+    ): array
     {
         $startYear = (int) $startYear;
         $endYear = (int) $endYear;
         try {
-            // Get geometry
-            $area = $areaType === 'region' 
-                ? Region::find($areaId) 
-                : District::find($areaId);
+            if ($geometrySnapshot === null) {
+                $area = $areaType === 'region'
+                    ? Region::find($areaId)
+                    : District::find($areaId);
 
-            if (!$area) {
+                if (!$area) {
+                    return [
+                        'status' => 'error',
+                        'error' => "Area not found: {$areaType} {$areaId}"
+                    ];
+                }
+
+                $geometry = is_array($area->geometry)
+                    ? $area->geometry
+                    : json_decode($area->geometry, true);
+                $geometrySnapshot = $this->normaliseGeometry($geometry ?? []);
+            }
+
+            if (!$geometrySnapshot) {
                 return [
                     'status' => 'error',
-                    'error' => "Area not found: {$areaType} {$areaId}"
+                    'error' => 'Geometry is required to queue computation.'
                 ];
             }
 
-            $geometry = is_array($area->geometry) 
-                ? $area->geometry 
-                : json_decode($area->geometry, true);
+            $geometryHash = $geometryHash ?? $this->computeGeometryHash($geometrySnapshot);
 
             // Calculate bbox
-            $bbox = $this->calculateBbox($geometry);
+            $bbox = $this->calculateBbox($geometrySnapshot);
 
             $periodLabel = $this->buildPeriodLabel($startYear, $endYear);
             Log::info("Queueing computation for {$areaType} {$areaId}, period {$periodLabel}");
@@ -133,13 +170,17 @@ class ErosionTileService
             $defaultsVersion = $configContext['version'];
 
             // Call Python service to queue task
+            $tileStorageKey = $this->buildTileStorageKey($areaType, $areaId, $geometryHash);
+
             $payload = [
                 'area_type' => $areaType,
                 'area_id' => $areaId,
                 'start_year' => $startYear,
                 'end_year' => $endYear,
-                'area_geometry' => $geometry,
+                'area_geometry' => $geometrySnapshot,
                 'bbox' => $bbox,
+                'geometry_hash' => $geometryHash,
+                'storage_key' => $tileStorageKey,
             ];
 
             if ($userId !== null) {
@@ -186,6 +227,10 @@ class ErosionTileService
                     'defaults_version' => $defaultsVersion,
                 ],
                 'user_id' => $userId,
+                'geometry_hash' => $geometryHash,
+                'tile_path_key' => $tileStorageKey,
+                'geometry_snapshot' => $geometrySnapshot,
+                'max_zoom' => $existingMap?->metadata['max_zoom'] ?? self::DEFAULT_MAX_ZOOM,
             ];
 
             // If we have an existing map, merge its existing metadata
@@ -200,12 +245,17 @@ class ErosionTileService
                     'year' => $startYear,
                     'user_id' => $userId,
                     'config_hash' => $configHash,
+                    'geometry_hash' => $geometryHash,
                 ],
                 [
                     'status' => 'queued',
-                    'metadata' => $metadata,
+                    'metadata' => array_merge($metadata, [
+                        'tile_path_key' => $tileStorageKey,
+                        'geometry_hash' => $geometryHash,
+                    ]),
                     'error_message' => null,
                     'config_snapshot' => $configSnapshot,
+                    'geometry_snapshot' => $geometrySnapshot,
                 ]
             );
 
@@ -217,6 +267,7 @@ class ErosionTileService
                 'start_year' => $startYear,
                 'end_year' => $endYear,
                 'period_label' => $periodLabel,
+                'geometry_hash' => $geometryHash,
                 'message' => "Computation queued for {$areaType} {$areaId}, period {$periodLabel}"
             ];
 
@@ -494,7 +545,7 @@ class ErosionTileService
         $endYear = $data['end_year'] ?? $startYear;
         $periodLabel = $data['period_label'] ?? $this->buildPeriodLabel((int) $startYear, (int) $endYear);
 
-        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+        if (!$taskId || !$areaType || $areaId === null || $startYear === null) {
             throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
@@ -503,12 +554,17 @@ class ErosionTileService
         $userId = $configContext['user_id'];
         $configHash = $configContext['hash'];
 
+        $geometryHash = $this->getGeometryHashFromData($data);
+        $maxZoom = (int) ($data['max_zoom'] ?? Arr::get($data, 'metadata.max_zoom', self::DEFAULT_MAX_ZOOM) ?? self::DEFAULT_MAX_ZOOM);
+        $maxZoom = (int) ($data['max_zoom'] ?? Arr::get($data, 'metadata.max_zoom', self::DEFAULT_MAX_ZOOM) ?? self::DEFAULT_MAX_ZOOM);
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
             'year' => $startYear,
             'user_id' => $userId,
             'config_hash' => $configHash,
+            'geometry_hash' => $geometryHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -529,7 +585,9 @@ class ErosionTileService
                         'defaults_version' => $configContext['version'],
                     ],
                     'user_id' => $userId,
+                    'geometry_hash' => $geometryHash,
                 ]),
+                'geometry_hash' => $geometryHash,
             ]);
             
             Log::info("Map status updated to processing: {$areaType} {$areaId}, period {$periodLabel}");
@@ -557,7 +615,7 @@ class ErosionTileService
         $endYear = $endYear !== null ? (int) $endYear : $startYear;
         $periodLabel = $data['period_label'] ?? $this->buildPeriodLabel((int) $startYear, (int) $endYear);
 
-        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+        if (!$taskId || !$areaType || $areaId === null || $startYear === null) {
             throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
@@ -567,12 +625,16 @@ class ErosionTileService
         $configHash = $configContext['hash'];
         $configSnapshot = $configContext['snapshot'];
 
+        $geometryHash = $this->getGeometryHashFromData($data);
+        $maxZoom = (int) ($data['max_zoom'] ?? Arr::get($data, 'metadata.max_zoom', self::DEFAULT_MAX_ZOOM) ?? self::DEFAULT_MAX_ZOOM);
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
             'year' => $startYear,
             'user_id' => $userId,
             'config_hash' => $configHash,
+            'geometry_hash' => $geometryHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -584,6 +646,8 @@ class ErosionTileService
         $statistics = $this->enrichStatistics($data['statistics'] ?? null, $data['metadata'] ?? null);
         $components = $data['components'] ?? $data['metadata']['components'] ?? null;
         
+        $tilePathKey = $this->getTilePathKeyFromData($data, $areaType, $areaId, $geometryHash);
+
         $baseMetadata = [
             'task_id' => $taskId,
             'period' => [
@@ -597,6 +661,9 @@ class ErosionTileService
                 'defaults_version' => $configContext['version'],
             ],
             'user_id' => $userId,
+            'geometry_hash' => $geometryHash,
+            'tile_path_key' => $tilePathKey,
+            'max_zoom' => $maxZoom,
         ];
 
         if ($map) {
@@ -621,6 +688,8 @@ class ErosionTileService
                 'user_id' => $userId,
                 'config_hash' => $configHash,
                 'config_snapshot' => $configSnapshot ?? Arr::get($updatedMetadata, 'rusle_config'),
+                'geometry_hash' => $geometryHash,
+                'geometry_snapshot' => $map->geometry_snapshot ?? Arr::get($data, 'geometry_snapshot'),
             ]);
             
             Log::info("Map updated to completed: {$areaType} {$areaId}, period {$periodLabel}");
@@ -633,6 +702,7 @@ class ErosionTileService
                     'year' => $startYear,
                     'user_id' => $userId,
                     'config_hash' => $configHash,
+                    'geometry_hash' => $geometryHash,
                 ],
                 [
                     'status' => 'completed',
@@ -647,6 +717,7 @@ class ErosionTileService
                     'computed_at' => now(),
                     'error_message' => null,
                     'config_snapshot' => $configSnapshot ?? Arr::get($data, 'metadata.rusle_config'),
+                    'geometry_snapshot' => Arr::get($data, 'geometry_snapshot'),
                 ]
             );
             
@@ -676,7 +747,7 @@ class ErosionTileService
         $error = $data['error'] ?? 'Unknown error';
         $errorType = $data['error_type'] ?? 'Exception';
 
-        if (!$taskId || !$areaType || !$areaId || $startYear === null) {
+        if (!$taskId || !$areaType || $areaId === null || $startYear === null) {
             throw new \InvalidArgumentException('Missing required fields: task_id, area_type, area_id, start_year');
         }
 
@@ -685,12 +756,15 @@ class ErosionTileService
         $userId = $configContext['user_id'];
         $configHash = $configContext['hash'];
 
+        $geometryHash = $this->getGeometryHashFromData($data);
+
         $mapQuery = PrecomputedErosionMap::where([
             'area_type' => $areaType,
             'area_id' => $areaId,
             'year' => $startYear,
             'user_id' => $userId,
             'config_hash' => $configHash,
+            'geometry_hash' => $geometryHash,
         ]);
 
         if ($endYear !== $startYear) {
@@ -715,6 +789,7 @@ class ErosionTileService
                     'defaults_version' => $configContext['version'],
                 ],
                 'user_id' => $userId,
+                'geometry_hash' => $geometryHash,
             ]
         );
 
@@ -733,6 +808,7 @@ class ErosionTileService
                 'user_id' => $userId,
                 'config_hash' => $configHash,
                 'config_snapshot' => $configContext['snapshot'] ?? $map->config_snapshot,
+                'geometry_hash' => $geometryHash,
             ]);
             
             Log::info("Map updated to failed: {$areaType} {$areaId}, period {$periodLabel}");
@@ -748,6 +824,7 @@ class ErosionTileService
                     'year' => $startYear,
                     'user_id' => $userId,
                     'config_hash' => $configHash,
+                    'geometry_hash' => $geometryHash,
                 ],
                 [
                     'status' => 'failed',
@@ -802,6 +879,80 @@ class ErosionTileService
 
             Log::error("Map failed: {$map->area_type} {$map->area_id}, year {$map->year}");
         }
+    }
+
+    private function normaliseGeometry(?array $geometry): ?array
+    {
+        if ($geometry === null) {
+            return null;
+        }
+
+        return $this->roundGeometryRecursive($geometry);
+    }
+
+    private function roundGeometryRecursive(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            $result = [];
+            foreach ($value as $key => $child) {
+                $result[$key] = $this->roundGeometryRecursive($child);
+            }
+            return $result;
+        }
+
+        if (is_float($value) || is_int($value)) {
+            return round((float) $value, 6);
+        }
+
+        return $value;
+    }
+
+    private function computeGeometryHash(?array $geometry): string
+    {
+        if (empty($geometry)) {
+            return self::DEFAULT_GEOMETRY_HASH;
+        }
+
+        return hash('sha256', json_encode($geometry, JSON_PRESERVE_ZERO_FRACTION));
+    }
+
+    private function buildTileStorageKey(string $areaType, int $areaId, ?string $geometryHash = null): string
+    {
+        if ($geometryHash && $geometryHash !== self::DEFAULT_GEOMETRY_HASH) {
+            return "{$areaType}_" . substr($geometryHash, 0, 24);
+        }
+
+        return "{$areaType}_{$areaId}";
+    }
+
+    private function getGeometryHashFromData(array $data): string
+    {
+        $hash = Arr::get($data, 'geometry_hash');
+
+        if (is_string($hash) && $hash !== '') {
+            return $hash;
+        }
+
+        $hash = Arr::get($data, 'metadata.geometry_hash');
+        
+        if (is_string($hash) && $hash !== '') {
+            return $hash;
+        }
+
+        return self::DEFAULT_GEOMETRY_HASH;
+    }
+
+    private function getTilePathKeyFromData(array $data, string $areaType, int $areaId, ?string $geometryHash): string
+    {
+        return Arr::get(
+            $data,
+            'tile_path_key',
+            Arr::get(
+                $data,
+                'metadata.tile_path_key',
+                $this->buildTileStorageKey($areaType, $areaId, $geometryHash)
+            )
+        );
     }
 }
 

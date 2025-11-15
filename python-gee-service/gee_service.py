@@ -173,7 +173,7 @@ class GEEService:
             logger.error(f"Failed to calculate bounding box: {str(e)}")
             raise
     
-    def compute_statistics(self, image, geometry, scale=30, timeout_seconds=None):
+    def compute_statistics(self, image, geometry, scale=1000, timeout_seconds=None):
         """Compute statistics for an image over a geometry"""
         try:
             # Use config timeout if not specified
@@ -393,12 +393,13 @@ class GEEService:
         is_complex = coord_count > Config.COMPLEX_GEOMETRY_THRESHOLD
         
         # Recommend processing parameters based on complexity
+        # All calculations use 1000m (1km) resolution
         if is_large_area and is_complex:
             # Very complex: Tajikistan-sized MultiPolygon
             recommended = {
                 'simplify_tolerance': 2000,  # 2km
-                'rusle_scale': 300,          # 300m
-                'sample_scale': 200,         # 200m
+                'rusle_scale': 1000,         # 1000m (1km)
+                'sample_scale': 1000,        # 1000m (1km)
                 'grid_size': 5,              # 5x5 grid
                 'max_samples': 25,           # Sample only 25 points
                 'batch_size': 50,
@@ -408,8 +409,8 @@ class GEEService:
             # Complex but smaller
             recommended = {
                 'simplify_tolerance': 1000,  # 1km
-                'rusle_scale': 200,          # 200m
-                'sample_scale': 150,         # 150m
+                'rusle_scale': 1000,          # 1000m (1km)
+                'sample_scale': 1000,         # 1000m (1km)
                 'grid_size': 7,              # 7x7 grid
                 'max_samples': 49,
                 'batch_size': 50,
@@ -419,19 +420,19 @@ class GEEService:
             # Large but simple
             recommended = {
                 'simplify_tolerance': 1000,  # 1km
-                'rusle_scale': 200,          # 200m
-                'sample_scale': 150,         # 150m
+                'rusle_scale': 1000,          # 1000m (1km)
+                'sample_scale': 1000,         # 1000m (1km)
                 'grid_size': 7,              # 7x7 grid
                 'max_samples': 50,
                 'batch_size': 50,
                 'max_workers': 6
             }
         else:
-            # Small and simple: use high quality
+            # Small and simple: use 1km resolution
             recommended = {
                 'simplify_tolerance': 500,   # 500m
-                'rusle_scale': 100,          # 100m
-                'sample_scale': 100,         # 100m
+                'rusle_scale': 1000,          # 1000m (1km)
+                'sample_scale': 1000,        # 1000m (1km)
                 'grid_size': 10,             # 10x10 grid
                 'max_samples': 100,
                 'batch_size': 30,
