@@ -1,7 +1,7 @@
 <template>
   <Transition name="toast">
     <div
-      v-if="visible"
+      v-if="isVisible"
       :class="[
         'relative w-full max-w-md rounded-lg shadow-2xl p-4 flex items-start space-x-3 pointer-events-auto',
         typeClass
@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { computed, watch, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
   type: {
@@ -40,12 +40,14 @@ const props = defineProps({
     type: Number,
     default: 0, // 0 = persist until dismissed
   },
-  show: Boolean,
+  show: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['close'])
 
-const visible = ref(props.show)
 let timeout = null
 
 const typeClass = computed(() => {
@@ -68,32 +70,41 @@ const icon = computed(() => {
   return icons[props.type] || icons.info
 })
 
-const close = () => {
-  visible.value = false
-  emit('close')
+const isVisible = computed(() => props.show)
+
+const clearTimer = () => {
   if (timeout) {
     clearTimeout(timeout)
+    timeout = null
   }
 }
 
-watch(() => props.show, (newVal) => {
-  visible.value = newVal
-  
-  if (newVal && props.duration > 0) {
-    // Auto-close after duration
-    if (timeout) clearTimeout(timeout)
-    timeout = setTimeout(() => {
-      close()
-    }, props.duration)
-  }
+const close = () => {
+  clearTimer()
+  emit('close')
+}
+
+watch(
+  () => props.show,
+  (newVal) => {
+    if (!newVal) {
+      clearTimer()
+      return
+    }
+
+    if (props.duration > 0) {
+      clearTimer()
+      timeout = setTimeout(() => {
+        close()
+      }, props.duration)
+    }
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(() => {
+  clearTimer()
 })
-
-// Start auto-close timer if initially visible
-if (visible.value && props.duration > 0) {
-  timeout = setTimeout(() => {
-    close()
-  }, props.duration)
-}
 </script>
 
 <style scoped>

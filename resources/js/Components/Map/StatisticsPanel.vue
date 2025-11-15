@@ -2,9 +2,9 @@
   <div class="bg-white rounded-lg shadow-lg p-6">
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-bold text-gray-900">
-        Detailed Statistics
+        {{ __("Detailed Statistics") }}
         <span v-if="panelSubtitle" class="text-sm font-normal text-gray-600">
-          - {{ panelSubtitle }}
+          - {{ __("panelSubtitle") }}
         </span>
       </h3>
 
@@ -29,7 +29,7 @@
     </div>
 
     <div v-if="formattedEntries.length === 0" class="text-sm text-gray-500">
-      Select an area to view statistics.
+      {{ __("Select an area to view statistics.") }}
     </div>
 
     <div v-else class="space-y-6">
@@ -43,7 +43,7 @@
             <div>
               <h4 class="font-semibold text-gray-900">{{ entry.areaName }}</h4>
               <p class="text-xs text-gray-500">
-                Key erosion and rainfall metrics for this {{ entry.areaTypeLabel.toLowerCase() }}.
+                {{ __("Key erosion and rainfall metrics for this") }} {{ __(entry.areaTypeLabel.toLowerCase()) }}.
               </p>
             </div>
             <span
@@ -57,30 +57,30 @@
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="text-center">
               <div class="text-2xl font-bold text-blue-600">{{ entry.erosion.mean }}</div>
-              <div class="text-xs text-gray-600">Mean (t/ha/yr)</div>
+              <div class="text-xs text-gray-600">{{ __("Mean (t/ha/yr)") }}</div>
             </div>
             <div class="text-center">
               <div class="text-2xl font-bold text-green-600">{{ entry.erosion.min }}</div>
-              <div class="text-xs text-gray-600">Min (t/ha/yr)</div>
+              <div class="text-xs text-gray-600">{{ __("Min (t/ha/yr)") }}</div>
             </div>
             <div class="text-center">
               <div class="text-2xl font-bold text-red-600">{{ entry.erosion.max }}</div>
-              <div class="text-xs text-gray-600">Max (t/ha/yr)</div>
+              <div class="text-xs text-gray-600">{{ __("Max (t/ha/yr)") }}</div>
             </div>
             <div class="text-center">
               <div class="text-2xl font-bold text-purple-600">{{ entry.erosion.cv }}%</div>
-              <div class="text-xs text-gray-600">CV</div>
+              <div class="text-xs text-gray-600">{{ __("CV") }}</div>
             </div>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="text-center">
               <div class="text-2xl font-bold text-orange-600">{{ entry.rainfall.slope }}%</div>
-              <div class="text-xs text-gray-600">Rainfall Trend (% change)</div>
+              <div class="text-xs text-gray-600">{{ __("Rainfall Trend (% change)") }}</div>
             </div>
             <div class="text-center">
               <div class="text-2xl font-bold text-teal-600">{{ entry.rainfall.cv }}%</div>
-              <div class="text-xs text-gray-600">Rainfall Variability (CV)</div>
+              <div class="text-xs text-gray-600">{{ __("Rainfall Variability (CV)") }}</div>
             </div>
           </div>
         </div>
@@ -95,10 +95,10 @@
           <div class="flex items-center justify-between">
             <div>
               <h4 class="font-semibold text-gray-900">
-                Severity Breakdown — {{ entry.areaName }}
+                {{ __("Severity Breakdown") }} — {{ entry.areaName }}
               </h4>
               <p class="text-xs text-gray-500">
-                Area share by erosion severity class (hectares & percentage).
+                {{ __("Area share by erosion severity class (hectares & percentage).") }}
               </p>
             </div>
             <span
@@ -113,9 +113,9 @@
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b">
-                  <th class="text-left py-2">Class</th>
-                  <th class="text-right py-2">Area (ha)</th>
-                  <th class="text-right py-2">Percentage</th>
+                  <th class="text-left py-2">{{ __("Class") }}</th>
+                  <th class="text-right py-2">{{ __("Area (ha)") }}</th>
+                  <th class="text-right py-2">{{ __("Percentage") }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -133,7 +133,7 @@
               </tbody>
               <tfoot>
                 <tr class="border-t font-semibold text-gray-700">
-                  <td class="py-2">Total</td>
+                  <td class="py-2">{{ __("Total") }}</td>
                   <td class="text-right py-2">
                     {{ (entry.severityTotals?.totalArea ?? entry.severityTotals?.area ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}
                   </td>
@@ -152,7 +152,7 @@
             ></canvas>
           </div>
           <p v-else class="text-xs text-gray-500 italic">
-            Not enough data to render the severity chart for this area.
+            {{ __("Not enough data to render the severity chart for this area.") }}
           </p>
         </div>
       </div>
@@ -166,10 +166,10 @@
           <div class="flex items-center justify-between">
             <div>
               <h4 class="font-semibold text-gray-900">
-                Top Eroding Areas — {{ entry.areaName }}
+                {{ __("Top Eroding Areas") }} — {{ entry.areaName }}
               </h4>
               <p class="text-xs text-gray-500">
-                Highest erosion hotspots within this {{ entry.areaTypeLabel.toLowerCase() }}.
+                {{ __("Highest erosion hotspots within this") }} {{ __(entry.areaTypeLabel.toLowerCase()) }}.
               </p>
             </div>
             <span
@@ -187,7 +187,7 @@
             ></canvas>
           </div>
           <p v-else class="text-xs text-gray-500 italic">
-            No ranked erosion hotspots were returned for this area.
+            {{ __("No ranked erosion hotspots were returned for this area.") }}
           </p>
         </div>
 
@@ -198,16 +198,16 @@
           <div class="flex items-center justify-between">
             <div>
               <h4 class="font-semibold text-gray-900">
-                Temporal Trend — {{ primaryAreaName }}
+                {{ __("Temporal Trend") }} — {{ primaryAreaName }}
               </h4>
               <p class="text-xs text-gray-500">
-                Annual erosion trend (t/ha/yr) across the selected time window.
+                {{ __("Annual erosion trend (t/ha/yr) across the selected time window.") }}
               </p>
             </div>
             <span
               class="px-2 py-1 rounded text-xs font-semibold uppercase tracking-wide bg-slate-100 text-slate-700"
             >
-              Time Series
+              {{ __("Time Series") }}
             </span>
           </div>
           <canvas ref="lineChartCanvas" class="max-h-64"></canvas>
@@ -223,10 +223,10 @@
           <div class="flex items-center justify-between">
             <div>
               <h4 class="font-semibold text-gray-900">
-                RUSLE Factors — {{ entry.areaName }}
+                {{ __("RUSLE Factors") }} — {{ entry.areaName }}
               </h4>
               <p class="text-xs text-gray-500">
-                Average R, K, LS, C, and P factors representing erosion drivers.
+                {{ __("Average R, K, LS, C, and P factors representing erosion drivers.") }}
               </p>
             </div>
             <span
@@ -243,12 +243,18 @@
               class="flex justify-between items-center border-b pb-2"
             >
               <div>
-                <div class="font-medium">{{ factor.name }}</div>
-                <div class="text-xs text-gray-600">{{ factor.description }}</div>
+                <div class="font-medium">
+                  {{ typeof factor.name === 'string' ? __(factor.name) : factor.name }}
+                </div>
+                <div class="text-xs text-gray-600">
+                  {{ typeof factor.description === 'string' ? __(factor.description) : factor.description }}
+                </div>
               </div>
               <div class="text-right">
                 <div class="font-semibold">{{ factor.value }}</div>
-                <div class="text-xs text-gray-600">{{ factor.unit }}</div>
+                <div class="text-xs text-gray-600">
+                  {{ typeof factor.unit === 'string' ? __(factor.unit) : factor.unit }}
+                </div>
               </div>
             </div>
           </div>
@@ -280,10 +286,10 @@ const props = defineProps({
 const activeTab = ref('overview')
 
 const tabs = [
-  { id: 'overview', name: 'Overview' },
-  { id: 'distribution', name: 'Area Distribution' },
-  { id: 'charts', name: 'Charts' },
-  { id: 'factors', name: 'RUSLE Factors' },
+  { id: 'overview', name: __('Overview') },
+  { id: 'distribution', name: __('Area Distribution') },
+  { id: 'charts', name: __('Charts') },
+  { id: 'factors', name: __('RUSLE Factors') },
 ]
 
 const pieChartRefs = ref({})
@@ -295,9 +301,9 @@ const barCharts = new Map()
 let lineChart = null
 
 const areaTypeLabels = {
-  country: 'Country',
-  region: 'Region',
-  district: 'District',
+  country: __('Country'),
+  region: __('Region'),
+  district: __('District'),
 }
 
 const areaBadgeClasses = {
@@ -307,20 +313,27 @@ const areaBadgeClasses = {
   default: 'bg-gray-100 text-gray-600',
 }
 
-const defaultSeverity = [
-  { class: 'Very Low', area: 0, percentage: 0 },
-  { class: 'Low', area: 0, percentage: 0 },
-  { class: 'Moderate', area: 0, percentage: 0 },
-  { class: 'Severe', area: 0, percentage: 0 },
-  { class: 'Excessive', area: 0, percentage: 0 },
+const severityClasses = [
+  { id: 'very_low', key: 'Very Low', label: __('Very Low'), min: 0, max: 5, color: 'text-green-700 font-medium' },
+  { id: 'low', key: 'Low', label: __('Low'), min: 5, max: 15, color: 'text-yellow-700 font-medium' },
+  { id: 'moderate', key: 'Moderate', label: __('Moderate'), min: 15, max: 30, color: 'text-orange-700 font-medium' },
+  { id: 'severe', key: 'Severe', label: __('Severe'), min: 30, max: 50, color: 'text-red-700 font-medium' },
+  { id: 'excessive', key: 'Excessive', label: __('Excessive'), min: 50, max: null, color: 'text-red-900 font-medium' },
 ]
 
+const defaultSeverity = severityClasses.map((severity) => ({
+  class: severity.label,
+  severityId: severity.id,
+  area: 0,
+  percentage: 0,
+}))
+
 const defaultRusleFactors = [
-  { id: 'r', name: 'R-Factor', description: 'Rainfall Erosivity', unit: 'MJ mm/(ha h yr)' },
-  { id: 'k', name: 'K-Factor', description: 'Soil Erodibility', unit: 't ha h/(ha MJ mm)' },
-  { id: 'ls', name: 'LS-Factor', description: 'Topographic', unit: 'dimensionless' },
-  { id: 'c', name: 'C-Factor', description: 'Cover Management', unit: '0-1' },
-  { id: 'p', name: 'P-Factor', description: 'Support Practice', unit: '0-1' },
+  { id: 'r', name: __('R-Factor'), description: __('Rainfall Erosivity'), unit: __('MJ mm/(ha h yr)') },
+  { id: 'k', name: __('K-Factor'), description: __('Soil Erodibility'), unit: __('t ha h/(ha MJ mm)') },
+  { id: 'ls', name: __('LS-Factor'), description: __('Topographic'), unit: __('dimensionless') },
+  { id: 'c', name: __('C-Factor'), description: __('Cover Management'), unit: __('0-1') },
+  { id: 'p', name: __('P-Factor'), description: __('Support Practice'), unit: __('0-1') },
 ]
 
 const formatNumber = (value, digits = 2) => {
@@ -347,7 +360,7 @@ const displayEntries = computed(() => {
       const name =
         area.name_en ||
         area.name ||
-        (areaType === 'country' ? 'Country' : `Area ${index + 1}`)
+        (areaType === 'country' ? __('Country') : __(`Area ${index + 1}`))
 
       return {
         key: entry.key || `${areaType}-${area.id ?? index}`,
@@ -367,7 +380,7 @@ const displayEntries = computed(() => {
       area.display_name ||
       area.name_en ||
       area.name ||
-      (areaType === 'country' ? 'Country' : 'Selected Area')
+      (areaType === 'country' ? __('Country') : __('Selected Area'))
 
     return [
       {
@@ -404,12 +417,14 @@ const formattedEntries = computed(() =>
         ? stats.severity_distribution
         : []
 
-    const severityOrder = ['Very Low', 'Low', 'Moderate', 'Severe', 'Excessive']
-
-    const severityDistribution = severityOrder.map((label, orderIdx) => {
+    const severityDistribution = severityClasses.map((severity, orderIdx) => {
       const matchingItem = severitySource.find((item) => {
         const itemLabel = (item.class || item.name || '').toLowerCase()
-        return itemLabel === label.toLowerCase()
+        return (
+          itemLabel === severity.key.toLowerCase() ||
+          itemLabel === severity.label.toLowerCase() ||
+          itemLabel === severity.id.toLowerCase()
+        )
       }) ?? severitySource[orderIdx] ?? {}
 
       let area = Number(
@@ -444,7 +459,8 @@ const formattedEntries = computed(() =>
       }
 
       return {
-        class: label,
+        class: severity.label,
+        severityId: severity.id,
         area,
         percentage,
       }
@@ -519,13 +535,10 @@ const formattedEntries = computed(() =>
 
     const entryTimeSeries = Array.isArray(entry.timeSeries) ? entry.timeSeries : []
 
-    const severityThresholds = {
-      'Very Low': { min: 0, max: 5 },
-      Low: { min: 5, max: 15 },
-      Moderate: { min: 15, max: 30 },
-      Severe: { min: 30, max: 50 },
-      Excessive: { min: 50, max: null },
-    }
+    const severityThresholds = severityClasses.reduce((acc, severity) => {
+      acc[severity.id] = { min: severity.min, max: severity.max }
+      return acc
+    }, {})
 
     const rawMin =
       Number(
@@ -549,20 +562,20 @@ const formattedEntries = computed(() =>
 
     if (minForDisplay === null) {
       const firstClass = severityDistribution.find(
-        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.class]
+        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.severityId]
       )
       if (firstClass) {
-        minForDisplay = severityThresholds[firstClass.class].min
+        minForDisplay = severityThresholds[firstClass.severityId].min
       }
     }
 
     if (maxForDisplay === null) {
       const reversed = [...severityDistribution].reverse()
       const lastClass = reversed.find(
-        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.class]
+        (item) => (item.area > 0 || item.percentage > 0) && severityThresholds[item.severityId]
       )
       if (lastClass) {
-        maxForDisplay = severityThresholds[lastClass.class].max ?? Math.max(rawMax || 0, 50)
+        maxForDisplay = severityThresholds[lastClass.severityId].max ?? Math.max(rawMax || 0, 50)
       }
     }
 
@@ -616,7 +629,7 @@ const primaryTimeSeries = computed(() => {
   return formattedEntries.value[0].timeSeries || []
 })
 
-const primaryAreaName = computed(() => formattedEntries.value[0]?.areaName || 'Selected Area')
+const primaryAreaName = computed(() => formattedEntries.value[0]?.areaName || __('Selected Area'))
 
 const panelSubtitle = computed(() => {
   if (!formattedEntries.value.length) return ''
@@ -625,14 +638,12 @@ const panelSubtitle = computed(() => {
 })
 
 const getSeverityColorClass = (className) => {
-  const colorMap = {
-    'Very Low': 'text-green-700 font-medium',
-    Low: 'text-yellow-700 font-medium',
-    Moderate: 'text-orange-700 font-medium',
-    Severe: 'text-red-700 font-medium',
-    Excessive: 'text-red-900 font-medium',
-  }
-  return colorMap[className] || 'text-gray-700'
+  const matchingSeverity =
+    severityClasses.find(
+      (severity) => severity.label === className || severity.key === className || severity.id === className
+    ) || null
+
+  return matchingSeverity?.color || 'text-gray-700'
 }
 
 const setPieChartRef = (key, el) => {

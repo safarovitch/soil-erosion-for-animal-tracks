@@ -1,10 +1,10 @@
 <template>
   <div class="space-y-4">
-    <h3 class="text-lg font-semibold text-gray-900">Year Range</h3>
+    <h3 class="text-lg font-semibold text-gray-900">{{ __("Year Range") }}</h3>
 
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-2">
-        Select 10-Year Period
+        {{ __("Select 10-Year Period") }}
       </label>
 
       <div
@@ -25,7 +25,7 @@
           @click="selectPeriod(period)"
         >
           <div class="flex items-center justify-between">
-            <span class="font-medium">{{ period.label }}</span>
+            <span class="font-medium">{{ typeof period.label === 'string' ? __(period.label) : period.label }}</span>
             <span
               v-if="period.id === selectedPeriodId"
               class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-xs"

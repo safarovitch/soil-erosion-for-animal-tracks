@@ -8,7 +8,7 @@
         <div
             class="absolute top-16 left-4 bg-white bg-opacity-90 px-3 py-1.5 rounded shadow-md text-sm font-semibold text-gray-700 z-10 border border-gray-300"
         >
-            <span class="text-gray-600">Zoom:</span>
+            <span class="text-gray-600">{{ __("Zoom:") }}</span>
             <span class="text-blue-600">{{ currentZoom.toFixed(2) }}</span>
         </div>
     </div>
@@ -1628,62 +1628,62 @@ const updateMapLayers = async () => {
     // Define available map layers
     const layerDefinitions = {
         erosion: {
-            name: "Soil Erosion Hazard",
+            name: __("Soil Erosion Hazard"),
             type: "rusle",
             apiEndpoint: null, // Uses detailed grid
             defaultOpacity: 1.0,
         },
         rainfall_slope: {
-            name: "Rainfall Trend",
+            name: __("Rainfall Trend"),
             type: "diverging",
             apiEndpoint: "/api/erosion/layers/rainfall-slope",
             defaultOpacity: 1.0,
             minYears: 3,
         },
         rainfall_cv: {
-            name: "Rainfall CV",
+            name: __("Rainfall CV"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/rainfall-cv",
             defaultOpacity: 1.0,
         },
         r_factor: {
-            name: "R-Factor",
+            name: __("R-Factor"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/r-factor",
             defaultOpacity: 1.0,
         },
         k_factor: {
-            name: "K-Factor",
+            name: __("K-Factor"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/k-factor",
             defaultOpacity: 1.0,
         },
         ls_factor: {
-            name: "LS-Factor",
+            name: __("LS-Factor"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/ls-factor",
             defaultOpacity: 1.0,
         },
         c_factor: {
-            name: "C-Factor",
+            name: __("C-Factor"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/c-factor",
             defaultOpacity: 1.0,
         },
         p_factor: {
-            name: "P-Factor",
+            name: __("P-Factor"),
             type: "sequential",
             apiEndpoint: "/api/erosion/layers/p-factor",
             defaultOpacity: 1.0,
         },
         bare_soil: {
-            name: "Bare Soil Frequency",
+            name: __("Bare Soil Frequency"),
             type: "sequential",
             apiEndpoint: null,
             defaultOpacity: 1.0,
         },
         sustainability: {
-            name: "Sustainability Factor",
+            name: __("Sustainability Factor"),
             type: "sequential",
             apiEndpoint: null,
             defaultOpacity: 1.0,
@@ -1697,7 +1697,7 @@ const updateMapLayers = async () => {
 
         layerDefinitions[layer.id] = {
             id: layer.id,
-            name: layer.name || "Custom Dataset",
+            name: layer.name || __("Custom Dataset"),
             type: "custom-tile",
             tileUrlTemplate: layer.tileUrlTemplate,
             defaultOpacity: layer.defaultOpacity ?? 1.0,

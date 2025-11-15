@@ -6,6 +6,7 @@ import { createInertiaApp } from "@inertiajs/vue3";
 import { resolvePageComponent } from "laravel-vite-plugin/inertia-helpers";
 import { createPinia } from "pinia";
 import { ZiggyVue } from "ziggy-js";
+import i18n from "@/Plugins/i18n";
 
 createInertiaApp({
     title: (title) =>
@@ -22,6 +23,10 @@ createInertiaApp({
             .use(plugin)
             .use(createPinia())
             .use(ZiggyVue)
+            .use(i18n, {
+                translations: props.initialPage.props.translations,
+                locale: props.initialPage.props.locale
+            })
             .mount(el);
     },
     progress: {

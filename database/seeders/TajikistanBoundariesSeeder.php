@@ -138,7 +138,7 @@ class TajikistanBoundariesSeeder extends Seeder
             ],
             [
                 'name_en' => 'Districts of Republican Subordination',
-                'name_tj' => 'Ноҳияҳои тобеи ҷумҳурӣ',
+                'name_tj' => 'Ноҳияҳои тобеи Марказ',
                 'code' => 'TJ-RA',
                 'area_km2' => 28600,
                 'geometry' => null,

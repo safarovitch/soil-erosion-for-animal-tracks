@@ -53,7 +53,7 @@
 
                 <div class="p-6">
                     <h2 class="text-xl font-bold mb-4 text-gray-800">
-                        Soil Erosion Analysis
+                        {{__("Soil Erosion Analysis")}}
                     </h2>
 
                     <!-- Region Selector -->
@@ -100,13 +100,13 @@
                                         : 'bg-gray-400 cursor-not-allowed'
                                 ]"
                             >
-                                Apply Selection
+                                {{__("Apply Selection")}}
                             </button>
                             <button
                                 @click="clearSelection"
                                 class="flex-1 px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-gray-600 hover:bg-gray-700"
                             >
-                                Clear Selection
+                                {{__("Clear Selection")}}
                             </button>
                         </div>
                         <button
@@ -114,14 +114,14 @@
                             :disabled="isExporting || !hasStatistics"
                             class="w-full px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                            <span v-if="isExporting">Preparing PDF...</span>
-                            <span v-else>Export Report (PDF)</span>
+                            <span v-if="isExporting">{{__("Preparing PDF...")}}</span>
+                            <span v-else>{{__("Export Report (PDF)")}}</span>
                         </button>
                         <p
                             v-if="needsApply && canApply"
                             class="text-xs text-amber-600 bg-amber-100 border border-amber-200 rounded-md px-3 py-2"
                         >
-                            Changes pending. Click "Apply Selection" to update statistics and layers.
+                            {{__("Changes pending. Click 'Apply Selection' to update statistics and layers.")}}
                         </p>
                     </div>
                 </div>
@@ -164,7 +164,7 @@
                         title="Change base map style"
                     >
                         <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                            Map
+                            {{__("Map")}}
                         </span>
                         <select
                             v-model="selectedBaseMapType"
@@ -185,11 +185,11 @@
                         title="Change base map style"
                     >
                         <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                            Language
+                            {{__("Language")}}
                         </span>
                         <select
                             v-model="selectedLanguage"
-                            :disabled="!mapInstance || languageOptions.length <= 1"
+                            :disabled="isChangingLocale || !mapInstance || languageOptions.length <= 1"
                             class="text-sm font-medium text-gray-700 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <option
@@ -213,7 +213,7 @@
                             <div
                                 class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"
                             ></div>
-                            <p class="text-gray-700">Loading map...</p>
+                            <p class="text-gray-700">{{__("Loading map...")}}</p>
                         </div>
                     </div>
 
@@ -267,7 +267,7 @@
                                 d="M5 15l7-7 7 7"
                             />
                         </svg>
-                        <span>Show Statistics & Charts</span>
+                        <span>{{__("Show Statistics & Charts")}}</span>
                     </button>
                 </div>
 
@@ -321,7 +321,7 @@
                         <!-- Erosion Risk Legend -->
                         <div class="mt-6 border-t pt-4">
                             <h4 class="text-sm font-bold mb-3 text-gray-700">
-                                Erosion Risk Classification (RUSLE)
+                                {{__("Erosion Risk Classification (RUSLE)")}}
                             </h4>
                             <div class="grid grid-cols-5 gap-2 text-xs">
                                 <div class="text-center">
@@ -337,9 +337,9 @@
                                         "
                                     ></div>
                                     <div class="font-medium text-green-700">
-                                        Very Low
+                                        {{__("Very Low")}}
                                     </div>
-                                    <div class="text-gray-600">0-5 t/ha/yr</div>
+                                    <div class="text-gray-600">{{__("0-5 t/ha/yr")}}</div>
                                 </div>
                                 <div class="text-center">
                                     <div
@@ -354,10 +354,10 @@
                                         "
                                     ></div>
                                     <div class="font-medium text-yellow-700">
-                                        Low
+                                        {{__("Low")}}
                                     </div>
                                     <div class="text-gray-600">
-                                        5-15 t/ha/yr
+                                        {{__("5-15 t/ha/yr")}}
                                     </div>
                                 </div>
                                 <div class="text-center">
@@ -373,10 +373,10 @@
                                         "
                                     ></div>
                                     <div class="font-medium text-orange-700">
-                                        Moderate
+                                        {{__("Moderate")}}
                                     </div>
                                     <div class="text-gray-600">
-                                        15-30 t/ha/yr
+                                        {{__("15-30 t/ha/yr")}}
                                     </div>
                                 </div>
                                 <div class="text-center">
@@ -392,10 +392,10 @@
                                         "
                                     ></div>
                                     <div class="font-medium text-red-700">
-                                        Severe
+                                        {{__("Severe")}}
                                     </div>
                                     <div class="text-gray-600">
-                                        30-50 t/ha/yr
+                                        {{__("30-50 t/ha/yr")}}
                                     </div>
                                 </div>
                                 <div class="text-center">
@@ -411,10 +411,10 @@
                                         "
                                     ></div>
                                     <div class="font-medium text-red-900">
-                                        Excessive
+                                        {{__("Excessive")}}
                                     </div>
                                     <div class="text-gray-600">
-                                        &gt; 50 t/ha/yr
+                                        {{__("> 50 t/ha/yr")}}
                                     </div>
                                 </div>
                             </div>
@@ -423,72 +423,13 @@
                 </div>
             </div>
         </div>
-
-        <!-- Login Modal -->
-        <div
-            v-if="showLogin"
-            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-            @click="showLogin = false"
-        >
-            <div class="bg-white rounded-lg p-6 w-96" @click.stop>
-                <h2 class="text-xl font-bold mb-4">Admin Login</h2>
-                <form @submit.prevent="login">
-                    <div class="mb-4">
-                        <label
-                            class="block text-gray-700 text-sm font-bold mb-2"
-                            for="email"
-                        >
-                            Email
-                        </label>
-                        <input
-                            id="email"
-                            v-model="loginForm.email"
-                            type="email"
-                            class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            required
-                        />
-                    </div>
-                    <div class="mb-6">
-                        <label
-                            class="block text-gray-700 text-sm font-bold mb-2"
-                            for="password"
-                        >
-                            Password
-                        </label>
-                        <input
-                            id="password"
-                            v-model="loginForm.password"
-                            type="password"
-                            class="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            required
-                        />
-                    </div>
-                    <div class="flex justify-end space-x-3">
-                        <button
-                            type="button"
-                            @click="showLogin = false"
-                            class="px-4 py-2 text-gray-600 hover:text-gray-800"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            :disabled="loginLoading"
-                            class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
-                        >
-                            {{ loginLoading ? "Logging in..." : "Login" }}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
     </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, inject } from "vue";
 import axios from "axios";
-import { router } from "@inertiajs/vue3";
+import { router, usePage } from "@inertiajs/vue3";
 import MapView from "@/Components/Map/MapView.vue";
 import RegionSelector from "@/Components/Map/RegionSelector.vue";
 import TimeSeriesSlider from "@/Components/Map/TimeSeriesSlider.vue";
@@ -508,6 +449,10 @@ const props = defineProps({
     districts: Array,
 });
 
+const page = usePage();
+const i18n = inject("i18n", null);
+const inertiaLocale = computed(() => page.props?.locale || "en");
+
 // Reactive data
 const selectedRegion = ref(null);
 const selectedDistrict = ref(null);
@@ -524,6 +469,7 @@ const visibleLayers = ref([]); // Start with no layers selected (country-wide de
 const showLabels = ref(true); // Show map labels by default
 const mapInstance = ref(null);
 const mapView = ref(null);
+const isChangingLocale = ref(false);
 const baseMapOptions = ref([{ id: "osm", label: "OpenStreetMap" }]);
 const selectedBaseMapType = ref("osm");
 const statistics = ref(null);
@@ -571,31 +517,50 @@ const languageOptions = ref([
     {
         id: "en",
         label: "English",
-        keys: ["name_en", "name"],
+        keys: ["name_en", "name_tj", "name_ru", "name"],
     },
     {
-        id: "tj",
+        id: "ru",
+        label: "Русский",
+        keys: ["name_ru", "name_tj", "name_en", "name"],
+    },
+    {
+        id: "tg",
         label: "Тоҷикӣ",
-        keys: ["name_tj", "name_en", "name"],
+        keys: ["name_tj", "name_ru", "name_en", "name"],
     },
 ]);
 
 const storedLanguage = typeof window !== "undefined" ? window.localStorage?.getItem("map_language") : null;
-const selectedLanguage = ref(
-    (storedLanguage && languageOptions.value.some((option) => option.id === storedLanguage))
-        ? storedLanguage
-        : languageOptions.value[0]?.id || "en"
-);
+const resolveInitialLanguage = () => {
+    const candidates = [
+        storedLanguage,
+        inertiaLocale.value,
+        languageOptions.value[0]?.id,
+    ];
+
+    for (const candidate of candidates) {
+        if (
+            typeof candidate === "string" &&
+            languageOptions.value.some((option) => option.id === candidate)
+        ) {
+            return candidate;
+        }
+    }
+
+    return languageOptions.value[0]?.id || "en";
+};
+const selectedLanguage = ref(resolveInitialLanguage());
 
 const currentLanguage = computed(() => {
     return languageOptions.value.find((option) => option.id === selectedLanguage.value) || languageOptions.value[0] || {
         id: "en",
         label: "English",
-        keys: ["name_en", "name"],
+        keys: ["name_en", "name_tj", "name_ru", "name"],
     };
 });
 
-const languageKeys = computed(() => currentLanguage.value?.keys || ["name_en", "name"]);
+const languageKeys = computed(() => currentLanguage.value?.keys || ["name_en", "name_tj", "name_ru", "name"]);
 
 const getLocalizedName = (entity, keys = languageKeys.value) => {
     if (!entity || typeof entity !== "object") {
@@ -661,14 +626,6 @@ watch(
     { immediate: true }
 );
 
-watch(
-    selectedLanguage,
-    (newValue) => {
-        if (typeof window !== "undefined" && window.localStorage) {
-            window.localStorage.setItem("map_language", newValue);
-        }
-    }
-);
 
 const canApply = computed(() => selectedAreas.value.length > 0 && !loading.value);
 
@@ -686,43 +643,43 @@ const CUSTOM_LAYER_PREFIX = "custom_dataset_";
 const baseAvailableLayers = Object.freeze([
     {
         id: "erosion",
-        name: "Soil Erosion Hazard",
+        name: __("Soil Erosion Hazard"),
         description: "Annual soil loss rate (A = R×K×LS×C×P)",
         metadata: { unit: "t/ha/yr" },
     },
     {
         id: "rainfall_cv",
-        name: "Rainfall Variability",
+        name: __("Rainfall Variability"),
         description: "Coefficient of variation (%)",
         metadata: { colorScheme: "sequential" },
     },
     {
         id: "r_factor",
-        name: "R-Factor (Rainfall Erosivity)",
+        name: __("R-Factor (Rainfall Erosivity)"),
         description: "Rainfall erosivity factor",
         metadata: { unit: "MJ mm/(ha h yr)" },
     },
     {
         id: "k_factor",
-        name: "K-Factor (Soil Erodibility)",
+        name: __("K-Factor (Soil Erodibility)"),
         description: "Soil erodibility factor",
         metadata: { unit: "t ha h/(ha MJ mm)" },
     },
     {
         id: "ls_factor",
-        name: "LS-Factor (Topographic)",
+        name: __("LS-Factor (Topographic)"),
         description: "Slope length and steepness factor",
         metadata: { unit: "dimensionless" },
     },
     {
         id: "c_factor",
-        name: "C-Factor (Cover Management)",
+        name: __("C-Factor (Cover Management)"),
         description: "Cover and management factor",
         metadata: { unit: "dimensionless", range: "0-1" },
     },
     {
         id: "p_factor",
-        name: "P-Factor (Support Practice)",
+        name: __("P-Factor (Support Practice)"),
         description: "Support practice factor",
         metadata: { unit: "dimensionless", range: "0-1" },
     },
@@ -742,7 +699,7 @@ const customLayerDefinitions = computed(() =>
             return {
                 id: `${CUSTOM_LAYER_PREFIX}${dataset.id}`,
                 datasetId: dataset.id,
-                name: dataset.name || `Custom Dataset ${dataset.id}`,
+                name: dataset.name || __(`Custom Dataset ${dataset.id}`),
                 description: dataset.description || "User uploaded raster dataset",
                 metadata,
                 tileUrlTemplate: dataset.tile_url_template,
@@ -790,7 +747,7 @@ const loadCustomDatasets = async () => {
         if (error.response?.status === 401 || error.response?.status === 403) {
             customDatasets.value = [];
         } else {
-            console.error("Failed to load custom datasets:", error);
+            console.error(__("Failed to load custom datasets:", error));
         }
     }
 };
@@ -846,6 +803,82 @@ const handleToastClose = (id) => {
         toasts.value = toasts.value.filter((toastItem) => toastItem.id !== id);
     }, 350);
 };
+
+const changeApplicationLanguage = async (targetLocale, force = false) => {
+    if (!i18n || !targetLocale) {
+        return;
+    }
+
+    if (!force && i18n.locale === targetLocale) {
+        return;
+    }
+
+    isChangingLocale.value = true;
+
+    try {
+        const response = await axios.post("/locale", { locale: targetLocale });
+        const payload = response?.data || {};
+        const resolvedLocale = payload.locale || targetLocale;
+        const nextTranslations =
+            payload.translations && typeof payload.translations === "object"
+                ? payload.translations
+                : {};
+
+        if (typeof i18n.setLocale === "function") {
+            i18n.setLocale(resolvedLocale, nextTranslations);
+        } else if (typeof i18n.setTranslations === "function") {
+            i18n.setTranslations(nextTranslations);
+        }
+    } catch (error) {
+        console.error("Failed to switch locale:", error);
+        showToast(
+            "error",
+            __("Language Switch Failed"),
+            __("Unable to change the application language right now.")
+        );
+    } finally {
+        isChangingLocale.value = false;
+    }
+};
+
+watch(
+    selectedLanguage,
+    (newValue) => {
+        if (typeof newValue === "string" && typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.setItem("map_language", newValue);
+        }
+    },
+    { immediate: true }
+);
+
+let hasAttemptedLocaleSync = false;
+watch(
+    selectedLanguage,
+    (newValue, oldValue) => {
+        if (!newValue || !i18n) {
+            return;
+        }
+
+        const currentLocale = i18n.locale || inertiaLocale.value;
+
+        if (!hasAttemptedLocaleSync) {
+            hasAttemptedLocaleSync = true;
+
+            if (newValue !== currentLocale) {
+                changeApplicationLanguage(newValue, true);
+            }
+
+            return;
+        }
+
+        if (newValue === oldValue) {
+            return;
+        }
+
+        changeApplicationLanguage(newValue);
+    },
+    { immediate: true }
+);
 
 const markAnalysisDirty = () => {
     needsApply.value = true;
@@ -930,6 +963,7 @@ const applySelection = async () => {
                     area_type: "country",
                     name_en: "Tajikistan",
                     name_tj: "Тоҷикистон",
+                    name_ru: "Таджикистан",
                     geometry: countryBoundary,
                 },
             ];
@@ -952,8 +986,8 @@ const applySelection = async () => {
             if (!areaWithGeometry.geometry) {
                 showToast(
                     "error",
-                    "Custom Area Missing Geometry",
-                    "Please draw a polygon before running the analysis.",
+                    __("Custom Area Missing Geometry"),
+                    __("Please draw a polygon before running the analysis."),
                     "",
                     { duration: 7000 }
                 );
@@ -972,7 +1006,7 @@ const applySelection = async () => {
 
         loading.value = true;
         progress.value = 0;
-        loadingMessage.value = "Calculating RUSLE statistics...";
+        loadingMessage.value = __("Calculating RUSLE statistics...");
 
         const results = [];
 
@@ -1065,7 +1099,7 @@ const waitForStatisticsPanelRender = async (panelEl, timeoutMs = 4000) => {
         await delay(150);
     }
 
-    console.warn("Statistics panel did not finish rendering before export.");
+    console.warn(__("Statistics panel did not finish rendering before export."));
     return false;
 };
 
@@ -1077,14 +1111,14 @@ const exportStatisticsReport = async () => {
     if (!hasStatistics.value) {
         showToast(
             "warning",
-            "Nothing to export",
-            "Run a calculation first to generate statistics before exporting the report."
+            __("Nothing to export"),
+            __("Run a calculation first to generate statistics before exporting the report.")
         );
         return;
     }
 
     if (!mapView.value) {
-        showToast("error", "Export Failed", "The map is not ready yet. Please try again in a moment.");
+        showToast("error", __("Export Failed"), __("The map is not ready yet. Please try again in a moment."));
         return;
     }
 
@@ -1112,12 +1146,12 @@ const exportStatisticsReport = async () => {
 
         const mapCapture = await mapView.value.captureMapAsImage();
         if (!mapCapture?.dataUrl) {
-            throw new Error("Unable to capture the map view.");
+            throw new Error(__("Unable to capture the map view."));
         }
 
         const panelEl = statisticsPanelRef.value;
         if (!panelEl) {
-            throw new Error("Statistics panel is not available for export.");
+            throw new Error(__("Statistics panel is not available for export.") );
         }
 
         await waitForStatisticsPanelRender(panelEl);
@@ -1199,19 +1233,19 @@ const exportStatisticsReport = async () => {
                               layerId
                       )
                       .join(", ")
-                : "Erosion (default)";
+                : __("Erosion (default)");
 
         const baseMapLabel =
-            selectedBaseMapType.value === "terrain" ? "MapTiler Terrain" : "OpenStreetMap";
+            selectedBaseMapType.value === "terrain" ? __("MapTiler Terrain") : __("OpenStreetMap");
 
-        const title = `Tajikistan Soil Erosion Calculation – ${timestamp}`;
+        const title = `${__("Tajikistan Soil Erosion Calculation")} – ${timestamp}`;
         const infoLines = [
-            `Calculation Parameters:`,
-            `• Selected Area(s): ${areaNames}`,
-            `• Period: ${currentPeriodLabel.value}`,
-            `• Resolution: 1 km`,
-            `• Visible Layer(s): ${layerNames}`,
-            `• Base Map: ${baseMapLabel}`,
+            __("Calculation Parameters:"),
+            __("• Selected Area(s):") + areaNames,
+            __("• Period:") + currentPeriodLabel.value,
+            __("• Resolution: 1 km"),
+            __("• Visible Layer(s):") + layerNames,
+            __("• Base Map:") + baseMapLabel,
         ];
         let pageWidth = doc.internal.pageSize.getWidth();
         let pageHeight = doc.internal.pageSize.getHeight();
@@ -1293,12 +1327,12 @@ const exportStatisticsReport = async () => {
                     entry.area?.name_en ||
                     entry.area?.name ||
                     entry.label ||
-                    "Area";
+                    __("Area");
 
                 const name =
                     typeof rawName === "string"
                         ? rawName.trim()
-                        : String(rawName || "Area").trim();
+                        : String(rawName || __("Area")).trim();
                 if (seen.has(name)) {
                     return;
                 }
@@ -1353,7 +1387,7 @@ const exportStatisticsReport = async () => {
                 pushRow({
                     area: selectedArea.value,
                     statistics: statistics.value,
-                    label: "Selected Area",
+                    label: __("Selected Area"),
                 });
             }
 
@@ -1388,19 +1422,19 @@ const exportStatisticsReport = async () => {
 
         if (statisticsTableRows.length) {
             doc.setFontSize(12);
-            doc.text("Erosion Statistics Summary", margin, cursorY);
+            doc.text(__("Erosion Statistics Summary"), margin, cursorY);
             cursorY += 6;
 
             autoTable(doc, {
                 startY: cursorY,
                 head: [
                     [
-                        "Area",
-                        "Mean (t/ha/yr)",
-                        "Min",
-                        "Max",
-                        "Rainfall Trend (%)",
-                        "Rainfall CV (%)",
+                        __("Area"),
+                        __("Mean (t/ha/yr)"),
+                        __("Min"),
+                        __("Max"),
+                        __("Rainfall Trend (%)"),
+                        __("Rainfall CV (%)"),
                     ],
                 ],
                 body: statisticsTableRows,
@@ -1435,15 +1469,15 @@ const exportStatisticsReport = async () => {
             }
 
             doc.setFontSize(12);
-            doc.text("RUSLE Factors Summary", margin, cursorY);
+            doc.text(__("RUSLE Factors Summary"), margin, cursorY);
             cursorY += 7;
 
             const columnX = [margin, margin + 45, margin + 85, margin + 120];
             doc.setFontSize(10);
-            doc.text("Factor", columnX[0], cursorY);
-            doc.text("Mean", columnX[1], cursorY);
-            doc.text("Unit", columnX[2], cursorY);
-            doc.text("Description", columnX[3], cursorY);
+            doc.text(__("Factor"), columnX[0], cursorY);
+            doc.text(__("Mean"), columnX[1], cursorY);
+            doc.text(__("Unit"), columnX[2], cursorY);
+            doc.text(__("Description"), columnX[3], cursorY);
             cursorY += 5;
 
             factorEntries.forEach((factor) => {
@@ -1453,9 +1487,9 @@ const exportStatisticsReport = async () => {
                     pageWidth = doc.internal.pageSize.getWidth();
                     pageHeight = doc.internal.pageSize.getHeight();
                     doc.setFontSize(10);
-                    doc.text("Factor", columnX[0], cursorY);
-                    doc.text("Mean", columnX[1], cursorY);
-                    doc.text("Unit", columnX[2], cursorY);
+                    doc.text(__("Factor"), columnX[0], cursorY);
+                    doc.text(__("Mean"), columnX[1], cursorY);
+                    doc.text(__("Unit"), columnX[2], cursorY);
                     doc.text("Description", columnX[3], cursorY);
                     cursorY += 5;
                 }
@@ -1512,15 +1546,15 @@ const exportStatisticsReport = async () => {
 
         showToast(
             "success",
-            "Export Ready",
-            "PDF report downloaded successfully."
+            __("Export Ready"),
+            __("PDF report downloaded successfully.")
         );
     } catch (error) {
-        console.error("Failed to export PDF:", error);
+        console.error(__("Failed to export PDF:"), error);
         showToast(
             "error",
-            "Export Failed",
-            error?.message || "An unexpected error occurred while generating the report."
+            __("Export Failed"),
+            error?.message || __("An unexpected error occurred while generating the report.")
         );
     } finally {
         if (restoreBottomPanel) {
@@ -1582,7 +1616,7 @@ const handleMapReady = (map) => {
 };
 
 const handleGeoJSONLoaded = async (geoJsonPath) => {
-    console.log("GeoJSON loaded, now loading districts data...");
+    console.log(__("GeoJSON loaded, now loading districts data..."));
     try {
         // Load districts from GeoJSON and merge with existing data
         await loadDistrictsFromGeoJSON(geoJsonPath);
@@ -1594,7 +1628,7 @@ const handleGeoJSONLoaded = async (geoJsonPath) => {
 // Load districts from GeoJSON and merge with existing data
 const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
     try {
-        console.log("Loading districts from GeoJSON for select boxes...");
+        console.log(__("Loading districts from GeoJSON for select boxes..."));
 
         const geoJsonData = await GeoJSONService.loadDistrictsFromGeoJSON(
             geoJsonPath,
@@ -1621,7 +1655,7 @@ const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
         });
 
         districts.value = combinedDistricts;
-        console.log(`Total districts available: ${combinedDistricts.length}`);
+        console.log(`${__("Total districts available:")} ${combinedDistricts.length}`);
 
         // Also merge regions if needed
         const existingRegions = regions.value || [];
@@ -1643,18 +1677,18 @@ const loadDistrictsFromGeoJSON = async (geoJsonPath) => {
             const name = (region.name_en || region.name || '').toLowerCase();
             return name && !name.includes('unknown') && !name.includes('dushanbe');
         });
-        console.log(`Total regions available: ${regions.value.length}`);
+        console.log(`${__("Total regions available:")} ${regions.value.length}`);
 
         refreshDisplayNames();
     } catch (error) {
-        console.warn("Could not load districts from GeoJSON:", error.message);
+        console.warn(__("Could not load districts from GeoJSON:"), error.message);
     }
 };
 
 const handleAreaTypeChange = (areaType) => {
     // This function is deprecated - area type is no longer used
     // Areas are now managed through region/district selection only
-    console.log("handleAreaTypeChange called but no longer used");
+    console.log(__("handleAreaTypeChange called but no longer used"));
 };
 
 // Load statistics for selected area
@@ -1705,7 +1739,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             areaType = "region";
         }
 
-        loadingMessage.value = `Calculating RUSLE statistics (${index + 1}/${total})...`;
+        loadingMessage.value = `${__("Calculating RUSLE statistics")} (${index + 1}/${total})...`;
 
         let cachedStatistics = null;
         let cachedComponents = [];
@@ -1736,14 +1770,14 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                         (startYear === endYear
                             ? `${startYear}`
                             : `${startYear}-${endYear}`);
-                    loadingMessage.value = `Loading cached RUSLE statistics (${index + 1}/${total})...`;
+                    loadingMessage.value = `${__("Loading cached RUSLE statistics")} (${index + 1}/${total})...`;
                     if (Array.isArray(availability.components)) {
                         cachedComponents = availability.components;
                     }
                 }
             } catch (error) {
                 console.warn(
-                    "Cached statistics check failed, falling back to live computation:",
+                    __("Cached statistics check failed, falling back to live computation:"),
                     error?.message || error
                 );
             }
@@ -1912,20 +1946,20 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             try {
                 data = JSON.parse(rawBody);
             } catch (parseError) {
-                console.error("Statistics response was not valid JSON:", {
+                console.error(__("Statistics response was not valid JSON:"), {
                     status: response.status,
                     bodySnippet: rawBody.slice(0, 500),
                     error: parseError,
                 });
                 throw new Error(
-                    `Unexpected response (status ${response.status}).` +
-                    " Server returned non-JSON content."
+                    `${__("Unexpected response (status")} ${response.status}).` +
+                    __(" Server returned non-JSON content.")
                 );
             }
         }
 
         if (!data.success || !data.data || !data.data.statistics) {
-            throw new Error(data.error || "Failed to compute statistics");
+            throw new Error(data.error || __("Failed to compute statistics"));
         }
 
         const stats = data.data.statistics;
@@ -1973,7 +2007,7 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
                     rainfallCV = Number(cvData.data.mean ?? rainfallCV);
                 }
             } catch (err) {
-                console.warn("Failed to fetch rainfall statistics:", err);
+                console.warn(__("Failed to fetch rainfall statistics:"), err);
             }
         }
 
@@ -2051,11 +2085,11 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
             components: componentEntries,
         };
     } catch (error) {
-        console.error("Failed to load area statistics:", error);
+        console.error(__("Failed to load area statistics:"), error);
         showToast(
             "error",
-            "Statistics Calculation Failed",
-            `Could not calculate statistics for ${getLocalizedName(area)}.`,
+            __("Statistics Calculation Failed"),
+            `${__("Could not calculate statistics for")} ${getLocalizedName(area)}.`,
             error.message
         );
         return null;
@@ -2135,8 +2169,8 @@ const handleCustomPolygonDrawn = (geometry) => {
 
     showToast(
         "info",
-        "Custom Area Ready",
-        "Polygon captured. Click Apply Selection to run the analysis.",
+        __("Custom Area Ready"),
+        __("Polygon captured. Click Apply Selection to run the analysis."),
         "",
         { duration: 6000 }
     );
@@ -2149,7 +2183,7 @@ const computeStatisticsForCustomArea = async (customArea, options = {}) => {
     
     loading.value = true;
     progress.value = 0;
-    loadingMessage.value = "Calculating RUSLE statistics for custom area...";
+    loadingMessage.value = __("Calculating RUSLE statistics for custom area...");
     
     try {
         const startYear = currentStartYear.value;
@@ -2260,9 +2294,9 @@ const computeStatisticsForCustomArea = async (customArea, options = {}) => {
         loadingMessage.value = "Statistics calculated successfully";
         
         if (!suppressToast) {
-            showToast("success", "Statistics Calculated", 
-                `Erosion statistics calculated for custom area (${periodLabel})`,
-                `Mean erosion rate: ${statisticsPayload.meanErosionRate.toFixed(2)} t/ha/yr`,
+            showToast("success", __("Statistics Calculated"), 
+                `${__("Erosion statistics calculated for custom area")} (${periodLabel})`,
+                `${__("Mean erosion rate:")} ${statisticsPayload.meanErosionRate.toFixed(2)} t/ha/yr`,
                 { duration: 5000 }
             );
         }
@@ -2273,8 +2307,8 @@ const computeStatisticsForCustomArea = async (customArea, options = {}) => {
         
     } catch (error) {
         console.error("Failed to compute statistics for custom area:", error);
-        showToast("error", "Statistics Calculation Failed",
-            "Could not calculate statistics for custom area.",
+        showToast("error", __("Statistics Calculation Failed"),
+            __("Could not calculate statistics for custom area."),
             error.message || "Unknown error occurred",
             { duration: 10000 }
         );
@@ -2450,7 +2484,7 @@ const handleLayerWarning = (warningData) => {
     console.log("Layer warning:", warningData);
     showToast(
         warningData.type || "info",
-        warningData.title || "Warning",
+        warningData.title || __("Warning"),
         warningData.message || "",
         warningData.details || ""
     );
@@ -2576,13 +2610,13 @@ const getErosionRateClass = (rate) => {
 // Helper function to get risk level background class
 const getRiskLevelBgClass = (level) => {
     switch (level) {
-        case "Very Low":
+        case __("Very Low"):
             return "bg-green-100 text-green-800";
-        case "Low":
+        case __("Low"):
             return "bg-yellow-100 text-yellow-800";
-        case "Moderate":
+        case __("Moderate"):
             return "bg-orange-100 text-orange-800";
-        case "Severe":
+        case __("Severe"):
             return "bg-red-100 text-red-800";
         case "Excessive":
             return "bg-red-900 text-white";
@@ -2594,11 +2628,11 @@ const getRiskLevelBgClass = (level) => {
 // Determine risk level from erosion rate
 const getRiskLevel = (rate) => {
     const erosionRate = parseFloat(rate);
-    if (erosionRate < 5) return "Very Low";
-    if (erosionRate < 15) return "Low";
-    if (erosionRate < 30) return "Moderate";
-    if (erosionRate < 50) return "Severe";
-    return "Excessive";
+    if (erosionRate < 5) return __("Very Low");
+    if (erosionRate < 15) return __("Low");
+    if (erosionRate < 30) return __("Moderate");
+    if (erosionRate < 50) return __("Severe");
+    return __("Excessive");
 };
 
 const loadErosionData = async () => {
@@ -2619,12 +2653,12 @@ const loadErosionData = async () => {
 
     loading.value = true;
     progress.value = 0;
-    loadingMessage.value = "Loading erosion data...";
+    loadingMessage.value = __("Loading erosion data...");
 
     try {
         // Simulate progress updates
         progress.value = 25;
-        loadingMessage.value = "Preparing analysis...";
+        loadingMessage.value = __("Preparing analysis...");
 
         let requestBody;
         if (selectedArea.value) {
@@ -2672,7 +2706,7 @@ const loadErosionData = async () => {
         });
 
         progress.value = 75;
-        loadingMessage.value = "Processing data...";
+        loadingMessage.value = __("Processing data...");
 
         const data = await response.json();
 
@@ -2681,14 +2715,14 @@ const loadErosionData = async () => {
             if (response.status === 503) {
                 showToast(
                     "error",
-                    "GEE Not Configured",
+                    __("GEE Not Configured"),
                     data.error,
                     data.details
                 );
             } else {
                 showToast(
                     "error",
-                    "Computation Error",
+                    __("Computation Error"),
                     data.error,
                     data.details
                 );
@@ -2752,14 +2786,14 @@ const loadErosionData = async () => {
             }
 
             progress.value = 100;
-            loadingMessage.value = "Complete!";
+            loadingMessage.value = __("Complete!");
         }
     } catch (error) {
-        console.error("Failed to load erosion data:", error);
+        console.error(__("Failed to load erosion data:"), error);
         showToast(
             "error",
-            "Data Loading Failed",
-            "Could not load erosion data for the selected area.",
+            __("Data Loading Failed"),
+            __("Could not load erosion data for the selected area."),
             error.message
         );
     } finally {
@@ -2775,11 +2809,11 @@ const loadErosionData = async () => {
 const analyzeGeometry = async (geometry) => {
     loading.value = true;
     progress.value = 0;
-    loadingMessage.value = "Analyzing drawn shape...";
+    loadingMessage.value = __("Analyzing drawn shape...");
 
     try {
         progress.value = 50;
-        loadingMessage.value = "Computing RUSLE factors...";
+        loadingMessage.value = __("Computing RUSLE factors...");
 
         const response = await fetch("/api/erosion/analyze-geometry", {
             method: "POST",
@@ -2797,7 +2831,7 @@ const analyzeGeometry = async (geometry) => {
         });
 
         progress.value = 100;
-        loadingMessage.value = "Analysis complete!";
+        loadingMessage.value = __("Analysis complete!");
 
         const data = await response.json();
         if (data.success && data.data && data.data.statistics) {
@@ -2824,16 +2858,16 @@ const analyzeGeometry = async (geometry) => {
 
             // Set selected area to the drawn shape
             selectedArea.value = applyDisplayName({
-                name: "Custom Drawn Area",
-                name_en: "Custom Drawn Area",
+                name: __("Custom Drawn Area"),
+                name_en: __("Custom Drawn Area"),
             });
         }
     } catch (error) {
         console.error("Failed to analyze geometry:", error);
         showToast(
             "error",
-            "Analysis Failed",
-            "Could not analyze the drawn shape.",
+            __("Analysis Failed"),
+            __("Could not analyze the drawn shape."),
             error.message
         );
     } finally {
@@ -2891,8 +2925,8 @@ const exportMapAsPNG = () => {
     if (!mapInstance.value) {
         showToast(
             "warning",
-            "Map Not Ready",
-            "Please wait for the map to load before exporting."
+            __("Map Not Ready"),
+            __("Please wait for the map to load before exporting.")
         );
         return;
     }
@@ -2949,9 +2983,9 @@ const exportMapAsPNG = () => {
                 "Country-wide";
             mapContext.fillText(`Area: ${areaName}`, 20, 55);
             mapContext.fillText(
-                `Period: ${
+                `${__("Period:")} ${
                     currentPeriodLabel.value
-                } | Date: ${new Date().toLocaleDateString()}`,
+                } | ${__("Date:")} ${new Date().toLocaleDateString()}`,
                 20,
                 75
             );
@@ -2976,8 +3010,8 @@ const exportMapAsPNG = () => {
             console.error("Error exporting map:", error);
             showToast(
                 "error",
-                "Export Failed",
-                "Could not export map as PNG.",
+                __("Export Failed"),
+                __("Could not export map as PNG."),
                 error.message
             );
             loading.value = false;
@@ -2995,28 +3029,28 @@ const exportStatisticsCSV = () => {
 
     const csvData = [];
 
-    csvData.push(["RUSLE Soil Erosion Statistics"]);
-    csvData.push(["Generated:", new Date().toLocaleString()]);
+    csvData.push([__("RUSLE Soil Erosion Statistics")]);
+    csvData.push([__("Generated:") + new Date().toLocaleString()]);
     csvData.push([]);
 
     areaStatistics.value.forEach((entry, index) => {
         const areaName =
             entry.area?.name ||
             entry.area?.name_en ||
-            `Area ${index + 1}`;
+            `${__("Area")} ${index + 1}`;
 
-        csvData.push([`Area ${index + 1}`]);
+        csvData.push([`${__("Area")} ${index + 1}`]);
         csvData.push(["Name", areaName]);
         csvData.push([
-            "Type",
+            __("Type"),
             entry.areaType
                 ? entry.areaType.charAt(0).toUpperCase() + entry.areaType.slice(1)
                 : "N/A",
         ]);
-        csvData.push(["Period", entry.periodLabel || currentPeriodLabel.value]);
+        csvData.push([__("Period"), entry.periodLabel || currentPeriodLabel.value]);
 
         if (entry.statistics?.riskLevel) {
-            csvData.push(["Risk Level", entry.statistics.riskLevel]);
+            csvData.push([__("Risk Level"), entry.statistics.riskLevel]);
         }
 
         csvData.push([]);
@@ -3030,39 +3064,39 @@ const exportStatisticsCSV = () => {
                 return Number(value).toFixed(digits);
             };
 
-            csvData.push(["Erosion Metrics"]);
-            csvData.push(["Metric", "Value", "Unit"]);
+            csvData.push([__("Erosion Metrics")]);
+            csvData.push([__("Metric"), __("Value"), __("Unit")]);
             csvData.push([
-                "Mean Erosion Rate",
+                __("Mean Erosion Rate"),
                 formatNumber(stats.meanErosionRate, 2),
                 "t/ha/yr",
             ]);
             csvData.push([
-                "Min Erosion Rate",
+                __("Min Erosion Rate"),
                 formatNumber(stats.minErosionRate, 2),
                 "t/ha/yr",
             ]);
             csvData.push([
-                "Max Erosion Rate",
+                __("Max Erosion Rate"),
                 formatNumber(stats.maxErosionRate, 2),
                 "t/ha/yr",
             ]);
             csvData.push([
-                "Coefficient of Variation",
+                __("Coefficient of Variation"),
                 formatNumber(stats.erosionCV, 1),
                 "%",
             ]);
             csvData.push([]);
 
-            csvData.push(["Rainfall Metrics"]);
+            csvData.push([__("Rainfall Metrics")]);
             csvData.push(["Metric", "Value", "Unit"]);
             csvData.push([
-                "Rainfall Trend",
+                __("Rainfall Trend"),
                 formatNumber(stats.rainfallSlope, 2),
                 "% per year",
             ]);
             csvData.push([
-                "Rainfall Variability",
+                __("Rainfall Variability"),
                 formatNumber(stats.rainfallCV, 1),
                 "%",
             ]);
@@ -3070,14 +3104,14 @@ const exportStatisticsCSV = () => {
 
             if (stats.bareSoilFrequency !== undefined) {
                 csvData.push([
-                    "Bare Soil Frequency",
+                    __("Bare Soil Frequency"),
                     formatNumber(stats.bareSoilFrequency, 1),
                     "%",
                 ]);
             }
             if (stats.sustainabilityFactor !== undefined) {
                 csvData.push([
-                    "Sustainability Factor",
+                    __("Sustainability Factor"),
                     formatNumber(stats.sustainabilityFactor, 2),
                     "",
                 ]);
@@ -3085,8 +3119,8 @@ const exportStatisticsCSV = () => {
             csvData.push([]);
 
             if (Array.isArray(stats.severityDistribution) && stats.severityDistribution.length) {
-                csvData.push(["Area by Severity Class"]);
-                csvData.push(["Class", "Area (ha)", "Percentage"]);
+                csvData.push([__("Area by Severity Class")]);
+                csvData.push([__("Class"), __("Area (ha)"), __("Percentage")]);
                 stats.severityDistribution.forEach((item) => {
                     csvData.push([
                         item.class,
@@ -3100,8 +3134,8 @@ const exportStatisticsCSV = () => {
             }
 
             if (Array.isArray(stats.topErodingAreas) && stats.topErodingAreas.length) {
-                csvData.push(["Top Eroding Areas"]);
-                csvData.push(["Name", "Erosion (t/ha/yr)"]);
+                csvData.push([__("Top Eroding Areas")]);
+                csvData.push([__("Name"), __("Erosion (t/ha/yr)")]);
                 stats.topErodingAreas.forEach((area) => {
                     csvData.push([
                         area.display_name ||
@@ -3117,25 +3151,25 @@ const exportStatisticsCSV = () => {
 
             if (stats.rusleFactors) {
                 const factors = stats.rusleFactors;
-                csvData.push(["RUSLE Factors"]);
-                csvData.push(["Factor", "Value", "Unit"]);
+                csvData.push([__("RUSLE Factors")]);
+                csvData.push([__("Factor"), __("Value"), __("Unit")]);
                 csvData.push([
-                    "R-Factor (Rainfall Erosivity)",
+                    __("R-Factor (Rainfall Erosivity)"),
                     factors.r ?? 0,
                     "MJ mm/(ha h yr)",
                 ]);
                 csvData.push([
-                    "K-Factor (Soil Erodibility)",
+                    __("K-Factor (Soil Erodibility)"),
                     factors.k ?? 0,
                     "t ha h/(ha MJ mm)",
                 ]);
                 csvData.push([
-                    "LS-Factor (Topographic)",
+                    __("LS-Factor (Topographic)"),
                     factors.ls ?? 0,
                     "dimensionless",
                 ]);
                 csvData.push([
-                    "C-Factor (Cover Management)",
+                    __("C-Factor (Cover Management)"),
                     factors.c ?? 0,
                     "0-1",
                 ]);
@@ -3278,7 +3312,7 @@ const loadCountryWideData = async () => {
 
     loading.value = true;
     progress.value = 0;
-    loadingMessage.value = "Loading country-wide erosion data...";
+    loadingMessage.value = __("Loading country-wide erosion data...");
 
     try {
         let totalErosion = 0;
@@ -3334,7 +3368,7 @@ const loadCountryWideData = async () => {
                 progress.value = Math.round(
                     (processedCount / districts.value.length) * 100
                 );
-                loadingMessage.value = `Processing district ${processedCount}/${districts.value.length}...`;
+                loadingMessage.value = `${__("Processing district")} ${processedCount}/${districts.value.length}...`;
 
                 return data;
             } catch (error) {

@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\ServiceProvider;
+use Inertia\Inertia;
 use Laravel\Telescope\Telescope;
 use Laravel\Pulse\Facades\Pulse;
 
@@ -17,7 +20,7 @@ class AppServiceProvider extends ServiceProvider
         if ($this->app->environment('local', 'development', 'staging')) {
             $this->app->register(\Laravel\Telescope\TelescopeServiceProvider::class);
         }
-        
+
         // Register Pulse service provider
         $this->app->register(\Laravel\Pulse\PulseServiceProvider::class);
     }
@@ -33,16 +36,31 @@ class AppServiceProvider extends ServiceProvider
             if (app()->environment('local', 'development')) {
                 return true;
             }
-            
+
             // In production/staging, require authentication
             return $request->user() && $request->user()->hasRole('admin');
         });
-        
+
         // Configure Pulse access
-        Pulse::user(fn ($user) => [
+        Pulse::user(fn($user) => [
             'name' => $user->name,
             'extra' => $user->email,
             'avatar' => null,
+        ]);
+
+        Inertia::share([
+            'locale' => fn() => App::getLocale(),
+
+            'translations' => function () {
+                $locale = App::getLocale();
+                $path = resource_path("lang/{$locale}.json");
+
+                if (File::exists($path)) {
+                    return json_decode(File::get($path), true);
+                }
+
+                return [];
+            },
         ]);
     }
 }

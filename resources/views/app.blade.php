@@ -5,7 +5,15 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="csrf-token" content="{{ csrf_token() }}">
 
-        <title inertia>{{ config('app.name', 'Laravel') }}</title>
+        <meta name="title" content="Soil Erosion Monitoring and Reporting System for Tajikistan">
+        <meta name="description" content="Calculate and estimate soil eroision rates in Tajikistan using the Revised Universal Soil Loss Equation (RUSLE).">
+        <meta name="keywords" content="soil erosion, monitoring, analysis, Tajikistan">
+        <meta name="author" content="ICARDA && Wyzo">
+        <meta name="robots" content="index, follow">
+        <meta name="googlebot" content="index, follow">
+        <meta name="google" content="notranslate">
+
+        <title inertia>{{ config('app.name', 'Soil Erosion Monitoring and Reporting System for Tajikistan') }}</title>
 
         <!-- Modern Fonts -->
         <link rel="preconnect" href="https://fonts.googleapis.com">

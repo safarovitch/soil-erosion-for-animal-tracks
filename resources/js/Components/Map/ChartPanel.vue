@@ -1,10 +1,10 @@
 <template>
   <div class="space-y-4">
-    <h3 class="text-lg font-semibold text-gray-900">Charts & Analytics</h3>
+    <h3 class="text-lg font-semibold text-gray-900">{{ __("Charts & Analytics") }}</h3>
 
     <!-- Time Series Chart -->
     <div v-if="timeSeriesData.length > 0" class="bg-white border rounded-lg p-4">
-      <h4 class="text-md font-medium text-gray-900 mb-3">Erosion Trend Over Time</h4>
+      <h4 class="text-md font-medium text-gray-900 mb-3">{{ __("Erosion Trend Over Time") }}</h4>
       <div class="h-48">
         <canvas ref="timeSeriesChart"></canvas>
       </div>
@@ -12,7 +12,7 @@
 
     <!-- Area Statistics -->
     <div v-if="selectedArea" class="bg-white border rounded-lg p-4">
-      <h4 class="text-md font-medium text-gray-900 mb-3">Area Statistics</h4>
+      <h4 class="text-md font-medium text-gray-900 mb-3">{{ __("Area Statistics") }}</h4>
 
       <!-- Pie Chart for Area Distribution -->
       <div class="h-48 mb-4">
@@ -22,19 +22,19 @@
       <!-- Summary Statistics -->
       <div class="grid grid-cols-2 gap-4 text-sm">
         <div class="bg-gray-50 p-3 rounded">
-          <div class="text-gray-600">Total Area</div>
+          <div class="text-gray-600">{{ __("Total Area") }}</div>
           <div class="font-semibold">{{ selectedArea.area_km2 }} km²</div>
         </div>
         <div class="bg-gray-50 p-3 rounded">
-          <div class="text-gray-600">Mean Erosion Rate</div>
+          <div class="text-gray-600">{{ __("Mean Erosion Rate") }}</div>
           <div class="font-semibold">{{ meanErosionRate }} t/ha/yr</div>
         </div>
         <div class="bg-gray-50 p-3 rounded">
-          <div class="text-gray-600">Bare Soil Frequency</div>
+          <div class="text-gray-600">{{ __("Bare Soil Frequency") }}</div>
           <div class="font-semibold">{{ meanBareSoilFreq }}%</div>
         </div>
         <div class="bg-gray-50 p-3 rounded">
-          <div class="text-gray-600">Sustainability Factor</div>
+          <div class="text-gray-600">{{ __("Sustainability Factor") }}</div>
           <div class="font-semibold">{{ meanSustainability }}</div>
         </div>
       </div>
@@ -42,7 +42,7 @@
 
     <!-- Erosion Distribution Histogram -->
     <div class="bg-white border rounded-lg p-4">
-      <h4 class="text-md font-medium text-gray-900 mb-3">Erosion Distribution</h4>
+      <h4 class="text-md font-medium text-gray-900 mb-3">{{ __("Erosion Distribution") }}</h4>
       <div class="h-48">
         <canvas ref="histogramChart"></canvas>
       </div>
@@ -50,7 +50,7 @@
 
     <!-- Comparison Chart -->
     <div v-if="comparisonData.length > 0" class="bg-white border rounded-lg p-4">
-      <h4 class="text-md font-medium text-gray-900 mb-3">Regional Comparison</h4>
+      <h4 class="text-md font-medium text-gray-900 mb-3">{{ __("Regional Comparison") }}</h4>
       <div class="h-48">
         <canvas ref="comparisonChart"></canvas>
       </div>
@@ -58,19 +58,19 @@
 
     <!-- Export Options -->
     <div class="bg-white border rounded-lg p-4">
-      <h4 class="text-md font-medium text-gray-900 mb-3">Export Data</h4>
+      <h4 class="text-md font-medium text-gray-900 mb-3">{{ __("Export Data") }}</h4>
       <div class="flex space-x-2">
         <button
           @click="exportChartData"
           class="flex-1 bg-blue-600 text-white px-3 py-2 rounded-md hover:bg-blue-700 text-sm"
         >
-          Export Charts
+          {{ __("Export Charts") }}
         </button>
         <button
           @click="exportStatistics"
           class="flex-1 bg-green-600 text-white px-3 py-2 rounded-md hover:bg-green-700 text-sm"
         >
-          Export Statistics
+          {{ __("Export Statistics") }}
         </button>
       </div>
     </div>
@@ -179,14 +179,14 @@ const createTimeSeriesChart = () => {
       labels: data.map(d => d.year),
       datasets: [
         {
-          label: 'Erosion Rate (t/ha/yr)',
+          label: __('Erosion Rate (t/ha/yr)'),
           data: data.map(d => d.erosion),
           borderColor: 'rgb(239, 68, 68)',
           backgroundColor: 'rgba(239, 68, 68, 0.1)',
           tension: 0.1,
         },
         {
-          label: 'Bare Soil Frequency (%)',
+          label: __('Bare Soil Frequency (%)'),
           data: data.map(d => d.bareSoil),
           borderColor: 'rgb(245, 158, 11)',
           backgroundColor: 'rgba(245, 158, 11, 0.1)',
@@ -205,7 +205,7 @@ const createTimeSeriesChart = () => {
           position: 'left',
           title: {
             display: true,
-            text: 'Erosion Rate (t/ha/yr)',
+            text: __('Erosion Rate (t/ha/yr)'),
           },
         },
         y1: {
@@ -214,7 +214,7 @@ const createTimeSeriesChart = () => {
           position: 'right',
           title: {
             display: true,
-            text: 'Bare Soil Frequency (%)',
+            text: __('Bare Soil Frequency (%)'),
           },
           grid: {
             drawOnChartArea: false,
@@ -237,7 +237,7 @@ const createAreaChart = () => {
 
   // Sample data - in real app this would come from props
   const data = {
-    labels: ['Low Risk', 'Moderate Risk', 'High Risk', 'Very High Risk'],
+    labels: [__('Low Risk'), __('Moderate Risk'), __('High Risk'), __('Very High Risk')],
     datasets: [{
       data: [30, 35, 25, 10],
       backgroundColor: [
@@ -278,7 +278,7 @@ const createHistogramChart = () => {
   const data = {
     labels: ['0-1', '1-2', '2-5', '5-10', '10-20', '20+'],
     datasets: [{
-      label: 'Area (km²)',
+      label: __('Area (km²)'),
       data: [150, 200, 300, 180, 120, 50],
       backgroundColor: 'rgba(59, 130, 246, 0.5)',
       borderColor: 'rgb(59, 130, 246)',
@@ -297,13 +297,13 @@ const createHistogramChart = () => {
           beginAtZero: true,
           title: {
             display: true,
-            text: 'Area (km²)',
+            text: __('Area (km²)'),
           },
         },
         x: {
           title: {
             display: true,
-            text: 'Erosion Rate (t/ha/yr)',
+            text: __('Erosion Rate (t/ha/yr)'),
           },
         },
       },
@@ -328,7 +328,7 @@ const createComparisonChart = () => {
     data: {
       labels: data.map(d => d.name),
       datasets: [{
-        label: 'Mean Erosion Rate',
+        label: __('Mean Erosion Rate'),
         data: data.map(d => d.erosion),
         backgroundColor: 'rgba(239, 68, 68, 0.5)',
         borderColor: 'rgb(239, 68, 68)',
@@ -343,7 +343,7 @@ const createComparisonChart = () => {
           beginAtZero: true,
           title: {
             display: true,
-            text: 'Erosion Rate (t/ha/yr)',
+            text: __('Erosion Rate (t/ha/yr)'),
           },
         },
       },

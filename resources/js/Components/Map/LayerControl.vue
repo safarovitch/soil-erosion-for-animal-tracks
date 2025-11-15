@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-4">
-    <h3 class="text-lg font-semibold text-gray-900">Layer Control</h3>
+    <h3 class="text-lg font-semibold text-gray-900">{{ __("Layer Control") }}</h3>
 
     <!-- Map Labels Toggle -->
     <div class="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
@@ -14,9 +14,9 @@
         />
         <div>
           <label for="map-labels" class="text-sm font-medium text-gray-900 cursor-pointer">
-            Map Labels
+            {{ __("Map Labels") }}
           </label>
-          <p class="text-xs text-gray-500">Show/hide map labels</p>
+          <p class="text-xs text-gray-500">{{ __("Show/hide map labels") }}</p>
         </div>
       </div>
     </div>
@@ -51,7 +51,7 @@
           <button
             @click="showLayerInfo(layer)"
             class="text-gray-400 hover:text-gray-600 text-sm"
-            title="Layer Information"
+            title="{{ __('Layer Information') }}"
           >
             ℹ️
           </button>
@@ -78,30 +78,30 @@
 
         <div class="space-y-3">
           <div>
-            <h4 class="text-sm font-medium text-gray-900">Description</h4>
+            <h4 class="text-sm font-medium text-gray-900">{{ __("Description") }}</h4>
             <p class="text-sm text-gray-600">{{ selectedLayerInfo.description }}</p>
           </div>
 
           <div v-if="selectedLayerInfo.metadata">
-            <h4 class="text-sm font-medium text-gray-900">Metadata</h4>
+            <h4 class="text-sm font-medium text-gray-900">{{ __("Metadata") }}</h4>
             <div class="text-sm text-gray-600 space-y-1">
               <div v-if="selectedLayerInfo.metadata.source">
-                <span class="font-medium">Source:</span> {{ selectedLayerInfo.metadata.source }}
+                <span class="font-medium">{{ __("Source:") }}</span> {{ selectedLayerInfo.metadata.source }}
               </div>
               <div v-if="selectedLayerInfo.metadata.resolution">
-                <span class="font-medium">Resolution:</span> {{ selectedLayerInfo.metadata.resolution }}
+                <span class="font-medium">{{ __("Resolution:") }}</span> {{ selectedLayerInfo.metadata.resolution }}
               </div>
               <div v-if="selectedLayerInfo.metadata.year">
-                <span class="font-medium">Year:</span> {{ selectedLayerInfo.metadata.year }}
+                <span class="font-medium">{{ __("Year:") }}</span> {{ selectedLayerInfo.metadata.year }}
               </div>
             </div>
           </div>
 
           <div v-if="selectedLayerInfo.legend">
-            <h4 class="text-sm font-medium text-gray-900">Legend</h4>
+            <h4 class="text-sm font-medium text-gray-900">{{ __("Legend") }}</h4>
             <div class="text-sm text-gray-600">
               <!-- Legend content would go here -->
-              <p>Legend information for {{ selectedLayerInfo.name }}</p>
+              <p>{{ __("Legend information for") }}  {{ selectedLayerInfo.name }}</p>
             </div>
           </div>
         </div>

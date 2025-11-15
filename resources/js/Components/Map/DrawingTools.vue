@@ -1,11 +1,11 @@
 <template>
   <div class="space-y-4">
-    <h3 class="text-lg font-semibold text-gray-900">Drawing Tools</h3>
+    <h3 class="text-lg font-semibold text-gray-900">{{ __("Drawing Tools") }}</h3>
 
     <!-- Drawing Mode Selection -->
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-2">
-        Drawing Mode
+        {{ __("Drawing Mode") }}
       </label>
       <div class="grid grid-cols-2 gap-2">
         <button
@@ -30,7 +30,7 @@
       <div class="flex items-start space-x-2">
         <span class="text-blue-600 text-lg">ℹ️</span>
         <div class="text-sm text-blue-800">
-          <p class="font-medium">{{ getDrawingModeInfo().name }} Mode Active</p>
+          <p class="font-medium">{{ getDrawingModeInfo().name }} {{ __("Mode Active") }}</p>
           <p>{{ getDrawingModeInfo().instructions }}</p>
         </div>
       </div>
@@ -38,7 +38,7 @@
 
     <!-- Shape Management Tools -->
     <div class="border-t pt-4">
-      <h4 class="text-sm font-medium text-gray-900 mb-2">Shape Management</h4>
+      <h4 class="text-sm font-medium text-gray-900 mb-2">{{ __("Shape Management") }}</h4>
       <div class="flex space-x-2">
         <button
           @click="toggleEditMode"
@@ -49,14 +49,14 @@
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           ]"
         >
-          ✏️ {{ editMode ? 'Stop Editing' : 'Edit Shapes' }}
+          ✏️ {{ editMode ? __('Stop Editing') : __('Edit Shapes') }}
         </button>
         <button
           @click="deleteSelectedShape"
           :disabled="!editMode"
           class="flex-1 bg-red-600 text-white px-3 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
         >
-          🗑️ Delete
+          🗑️ {{ __("Delete") }}
         </button>
       </div>
       <button
@@ -64,14 +64,14 @@
         @click="clearAllShapes"
         class="w-full mt-2 bg-gray-600 text-white px-3 py-2 rounded-md hover:bg-gray-700 text-sm"
       >
-        Clear All Shapes
+        {{ __("Clear All Shapes") }}
       </button>
     </div>
 
     <!-- Drawing History -->
     <div v-if="drawingHistory.length > 0" class="border-t pt-4">
       <div class="flex items-center justify-between mb-2">
-        <h4 class="text-sm font-medium text-gray-900">Drawn Shapes ({{ drawingHistory.length }})</h4>
+        <h4 class="text-sm font-medium text-gray-900">{{ __("Drawn Shapes") }} ({{ drawingHistory.length }})</h4>
       </div>
 
       <div class="space-y-2 max-h-32 overflow-y-auto">
@@ -105,7 +105,7 @@
 
     <!-- Measurement Tools -->
     <div class="border-t pt-4">
-      <h4 class="text-sm font-medium text-gray-900 mb-2">Measurements</h4>
+      <h4 class="text-sm font-medium text-gray-900 mb-2">{{ __("Measurements") }}</h4>
       <div class="grid grid-cols-2 gap-2">
         <button
           @click="toggleMeasurement('area')"
@@ -116,7 +116,7 @@
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           ]"
         >
-          📐 Area
+          📐 {{ __("Area") }}
         </button>
         <button
           @click="toggleMeasurement('distance')"
@@ -127,7 +127,7 @@
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
           ]"
         >
-          📏 Distance
+          📏 {{ __("Distance") }}
         </button>
       </div>
 
@@ -142,21 +142,21 @@
 
     <!-- Export Tools -->
     <div class="border-t pt-4">
-      <h4 class="text-sm font-medium text-gray-900 mb-2">Export</h4>
+      <h4 class="text-sm font-medium text-gray-900 mb-2">{{ __("Export") }}</h4>
       <div class="flex space-x-2">
         <button
           @click="exportDrawings"
           :disabled="drawingHistory.length === 0"
           class="flex-1 bg-purple-600 text-white px-3 py-2 rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
         >
-          Export GeoJSON
+          {{ __("Export GeoJSON") }}
         </button>
         <button
           @click="exportStatistics"
           :disabled="!selectedDrawing"
           class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
         >
-          Export Stats
+          {{ __("Export Stats") }}
         </button>
       </div>
     </div>
@@ -185,12 +185,12 @@ const editMode = ref(false)
 
 // Drawing modes
 const drawingModes = ref([
-  { id: 'none', name: 'None', icon: '✋', instructions: 'Click to deactivate drawing mode' },
+  { id: 'none', name: __('None'), icon: '✋', instructions: __('Click to deactivate drawing mode') },
   { id: 'point', name: 'Point', icon: '📍', instructions: 'Click on the map to place a point' },
-  { id: 'line', name: 'Line', icon: '📏', instructions: 'Click to start, click to add points, double-click to finish' },
-  { id: 'polygon', name: 'Polygon', icon: '⬟', instructions: 'Click to start, click to add points, double-click to close' },
-  { id: 'rectangle', name: 'Rectangle', icon: '⬜', instructions: 'Click and drag to create a rectangle' },
-  { id: 'circle', name: 'Circle', icon: '⭕', instructions: 'Click and drag to create a circle' },
+  { id: 'line', name: __('Line'), icon: '📏', instructions: __('Click to start, click to add points, double-click to finish') },
+  { id: 'polygon', name: __('Polygon'), icon: '⬟', instructions: __('Click to start, click to add points, double-click to close') },
+  { id: 'rectangle', name: __('Rectangle'), icon: '⬜', instructions: __('Click and drag to create a rectangle') },
+  { id: 'circle', name: __('Circle'), icon: '⭕', instructions: __('Click and drag to create a circle') },
 ])
 
 // Computed properties
