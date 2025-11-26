@@ -3067,32 +3067,6 @@ const exportStatisticsCSV = () => {
 };
 
 // Panel Resize Functions
-const startLeftResize = (event) => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = leftSidebarWidth.value;
-
-    const onMouseMove = (e) => {
-        const deltaX = e.clientX - startX;
-        const maxWidth = window.innerWidth * 0.5; // Max 50% of screen width
-        const newWidth = Math.max(250, Math.min(maxWidth, startWidth + deltaX));
-        leftSidebarWidth.value = newWidth;
-
-        // Update map size
-        if (mapInstance.value) {
-            setTimeout(() => mapInstance.value.updateSize(), 100);
-        }
-    };
-
-    const onMouseUp = () => {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-    };
-
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-};
-
 const startBottomResize = (event) => {
     event.preventDefault();
     const startY = event.clientY;
@@ -3128,13 +3102,6 @@ const startBottomResize = (event) => {
 };
 
 // Watchers for panel visibility changes
-watch(leftSidebarVisible, () => {
-    // Update map size when sidebar is toggled
-    if (mapInstance.value) {
-        setTimeout(() => mapInstance.value.updateSize(), 200);
-    }
-});
-
 watch(bottomPanelVisible, () => {
     // Update map size when bottom panel is toggled
     if (mapInstance.value) {
