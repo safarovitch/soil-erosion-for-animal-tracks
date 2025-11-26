@@ -8,7 +8,7 @@
         />
 
         <!-- Toast Notifications (stacked) -->
-        <div class="fixed top-4 right-4 z-50 flex flex-col space-y-3 pointer-events-none">
+        <div class="fixed top-16 right-4 z-50 flex flex-col space-y-3 pointer-events-none">
             <ToastNotification
                 v-for="toastItem in toasts"
                 :key="toastItem.id"
@@ -22,401 +22,255 @@
             />
         </div>
 
-        <!-- Main Content -->
-        <div class="flex flex-1 overflow-hidden relative">
-            <!-- Left Sidebar -->
+        <!-- Horizontal Toolbar -->
+        <div class="bg-white border-b border-gray-200 shadow-sm px-4 py-2 flex items-center justify-between gap-4 flex-shrink-0 z-40">
+            <!-- Left Section: Custom Area & Year Range -->
+            <div class="flex items-center gap-3">
+                <!-- Custom Area Button -->
+                <button
+                    type="button"
+                    @click="handleCustomAreaToggle(!customAreaDrawing)"
+                    :class="[
+                        'px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center gap-2',
+                        customAreaDrawing
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                    ]"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l11.563-11.563z" />
+                    </svg>
+                    <span>{{ customAreaDrawing ? __('Drawing...') : __('Draw Area') }}</span>
+                </button>
+
+                <!-- Year Range Selector -->
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-600">{{ __('Period') }}:</label>
+                    <select
+                        v-model="selectedPeriodId"
+                        @change="handlePeriodSelectChange"
+                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white min-w-[160px]"
+                    >
+                        <option
+                            v-for="period in yearPeriods"
+                            :key="period.id"
+                            :value="period.id"
+                        >
+                            {{ period.label }}
+                        </option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Center Section: Action Buttons -->
+            <div class="flex items-center gap-2">
+                <button
+                    @click="applySelection"
+                    :disabled="!canApply"
+                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
+                    :class="[
+                        canApply
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    ]"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    {{ __('Apply') }}
+                </button>
+                <button
+                    @click="clearSelection"
+                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 flex items-center gap-2"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    {{ __('Clear') }}
+                </button>
+                <button
+                    @click="exportStatisticsReport"
+                    :disabled="isExporting || !hasStatistics"
+                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
+                    :class="[
+                        hasStatistics && !isExporting
+                            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    ]"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    <span v-if="isExporting">{{ __('Exporting...') }}</span>
+                    <span v-else>{{ __('Export PDF') }}</span>
+                </button>
+            </div>
+
+            <!-- Right Section: Map & Language -->
+            <div class="flex items-center gap-3">
+                <!-- Map Style Selector -->
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-600">{{ __('Map') }}:</label>
+                    <select
+                        v-model="selectedBaseMapType"
+                        :disabled="!mapInstance || baseMapOptions.length <= 1"
+                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                    >
+                        <option
+                            v-for="option in baseMapOptions"
+                            :key="option.id"
+                            :value="option.id"
+                        >
+                            {{ option.label }}
+                        </option>
+                    </select>
+                </div>
+
+                <!-- Language Selector -->
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-600">{{ __('Lang') }}:</label>
+                    <select
+                        v-model="selectedLanguage"
+                        :disabled="isChangingLocale || !mapInstance || languageOptions.length <= 1"
+                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                    >
+                        <option
+                            v-for="option in languageOptions"
+                            :key="option.id"
+                            :value="option.id"
+                        >
+                            {{ option.label }}
+                        </option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content: Map and Statistics -->
+        <div class="flex-1 flex flex-col overflow-hidden relative">
+            <!-- Map Container -->
+            <div class="flex-1 relative bg-gray-100 overflow-hidden">
+                <div
+                    v-if="!mapInstance"
+                    class="flex items-center justify-center h-full"
+                >
+                    <div class="text-center">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                        <p class="text-gray-700">{{ __('Loading map...') }}</p>
+                    </div>
+                </div>
+
+                <MapView
+                    ref="mapView"
+                    :regions="regions"
+                    :districts="districts"
+                    :selected-region="selectedRegion"
+                    :selected-district="selectedDistrict"
+                    :selected-areas="selectedAreas"
+                    :selected-period="selectedPeriod"
+                    :visible-layers="visibleLayers"
+                    :analysis-trigger="analysisTrigger"
+                    :custom-layers="customLayerDefinitions"
+                    :custom-area-drawing="customAreaDrawing"
+                    @map-ready="handleMapReady"
+                    @statistics-updated="handleStatisticsUpdated"
+                    @district-clicked="handleDistrictClicked"
+                    @region-clicked="handleRegionClicked"
+                    @geojson-loaded="handleGeoJSONLoaded"
+                    @area-toggle-selection="handleAreaToggleSelection"
+                    @area-replace-selection="handleAreaReplaceSelection"
+                    @boundary-violation="handleBoundaryViolation"
+                    @layer-warning="handleLayerWarning"
+                    @custom-polygon-drawn="handleCustomPolygonDrawn"
+                />
+
+                <!-- Map Legend (Erosion layer is always visible) -->
+                <MapLegend
+                    :visible-layers="['erosion']"
+                    :available-layers="availableLayers"
+                />
+
+                <!-- Expand Bottom Panel Button (when collapsed) -->
+                <button
+                    v-show="!bottomPanelVisible && hasStatistics"
+                    @click="bottomPanelVisible = true"
+                    class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-30 px-4 py-2 bg-white rounded-lg shadow-xl hover:bg-gray-50 flex items-center space-x-2"
+                    title="Show statistics"
+                >
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                    </svg>
+                    <span>{{ __('Show Statistics') }}</span>
+                </button>
+            </div>
+
+            <!-- Bottom Statistics Panel -->
             <div
-                v-show="leftSidebarVisible"
-                :style="{ width: leftSidebarWidth + 'px', maxWidth: '50vw' }"
-                class="h-full bg-white border-r border-gray-200 shadow-lg overflow-y-auto flex-shrink-0 relative"
+                v-show="bottomPanelVisible"
+                :style="{
+                    height: bottomPanelHeight + 'px',
+                    minHeight: '200px',
+                    maxHeight: 'calc(100vh - 150px)',
+                }"
+                class="bg-white/95 backdrop-blur-sm border-t border-gray-200 shadow-2xl overflow-hidden flex-shrink-0 flex flex-col relative"
             >
+                <!-- Resize Handle -->
+                <div
+                    class="absolute top-0 left-0 w-full h-1 cursor-row-resize hover:bg-blue-500 bg-gray-300 z-30"
+                    @mousedown="startBottomResize"
+                ></div>
+
                 <!-- Collapse Button -->
                 <button
-                    @click="leftSidebarVisible = false"
-                    class="absolute top-2 right-2 z-10 p-1 rounded hover:bg-gray-100"
-                    title="Collapse sidebar"
+                    @click="bottomPanelVisible = false"
+                    class="absolute top-2 right-2 z-30 p-1 rounded hover:bg-gray-100 bg-white shadow"
+                    title="Collapse statistics"
                 >
-                    <svg
-                        class="w-5 h-5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                    >
-                        <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M15 19l-7-7 7-7"
-                        />
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
 
-                <div class="p-6">
-                    <h2 class="text-xl font-bold mb-4 text-gray-800">
-                        {{__("Soil Erosion Analysis")}}
-                    </h2>
-
-                    <!-- Region Selector -->
-                    <RegionSelector
-                        v-model:selectedRegion="selectedRegion"
-                        v-model:selectedDistrict="selectedDistrict"
-                        :selected-areas="selectedAreas"
-                        :regions="regions"
-                        :districts="districts"
-                        @region-change="handleRegionChange"
-                        @district-change="handleDistrictChange"
-                        @areas-change="handleAreasChange"
-                        @custom-area-toggle="handleCustomAreaToggle"
+                <!-- Scrollable Content Area -->
+                <div ref="statisticsPanelRef" class="flex-1 overflow-y-auto p-6 pt-8">
+                    <!-- Comprehensive Statistics Panel -->
+                    <StatisticsPanel
+                        :selected-area="selectedArea"
+                        :statistics="statistics"
+                        :area-statistics="areaStatistics"
+                        :time-series-data="timeSeriesData"
                     />
 
-                    <!-- Time Series Slider -->
-                    <TimeSeriesSlider
-                        v-model:period="selectedPeriod"
-                        @period-change="handlePeriodChange"
-                        class="mt-6"
-                    />
-
-                    <!-- Layer Controls -->
-                    <LayerControl
-                        :visible-layers="visibleLayers"
-                        :available-layers="availableLayers"
-                        :show-labels="showLabels"
-                        @layer-toggle="handleLayerToggle"
-                        @labels-toggle="handleLabelsToggle"
-                        class="mt-6"
-                    />
-
-                    <!-- Drawing Tools -->
-
-                    <div class="mt-8 space-y-2">
-                        <div class="flex space-x-2">
-                            <button
-                                @click="applySelection"
-                                :disabled="!canApply"
-                                class="flex-1 px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors"
-                                :class="[
-                                    canApply
-                                        ? 'bg-blue-600 hover:bg-blue-700'
-                                        : 'bg-gray-400 cursor-not-allowed'
-                                ]"
-                            >
-                                {{__("Apply Selection")}}
-                            </button>
-                            <button
-                                @click="clearSelection"
-                                class="flex-1 px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-gray-600 hover:bg-gray-700"
-                            >
-                                {{__("Clear Selection")}}
-                            </button>
-                        </div>
-                        <button
-                            @click="exportStatisticsReport"
-                            :disabled="isExporting || !hasStatistics"
-                            class="w-full px-4 py-2 rounded-md text-white text-sm font-semibold transition-colors bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                            <span v-if="isExporting">{{__("Preparing PDF...")}}</span>
-                            <span v-else>{{__("Export Report (PDF)")}}</span>
-                        </button>
-                        <p
-                            v-if="needsApply && canApply"
-                            class="text-xs text-amber-600 bg-amber-100 border border-amber-200 rounded-md px-3 py-2"
-                        >
-                            {{__("Changes pending. Click 'Apply Selection' to update statistics and layers.")}}
-                        </p>
-                    </div>
-                </div>
-
-                <!-- Resize Handle -->
-                <div
-                    class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500 bg-gray-300"
-                    @mousedown="startLeftResize"
-                ></div>
-            </div>
-
-            <!-- Expand Button (when sidebar is collapsed) -->
-            <button
-                v-show="!leftSidebarVisible"
-                @click="leftSidebarVisible = true"
-                class="absolute top-4 left-4 z-20 p-2 bg-white rounded-lg shadow-lg hover:bg-gray-50"
-                title="Expand sidebar"
-            >
-                <svg
-                    class="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                >
-                    <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M9 5l7 7-7 7"
-                    />
-                </svg>
-            </button>
-
-            <!-- Map and Statistics Container -->
-            <div class="flex-1 flex flex-col overflow-hidden relative">
-                <!-- Export Toolbar -->
-                <div class="absolute top-4 right-4 z-30 flex space-x-2">
-                    <div
-                        class="px-3 py-2 bg-white rounded-lg shadow-lg flex items-center space-x-2"
-                        title="Change base map style"
-                    >
-                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                            {{__("Map")}}
-                        </span>
-                        <select
-                            v-model="selectedBaseMapType"
-                            :disabled="!mapInstance || baseMapOptions.length <= 1"
-                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <option
-                                v-for="option in baseMapOptions"
-                                :key="option.id"
-                                :value="option.id"
-                            >
-                                {{ option.label }}
-                            </option>
-                        </select>
-                    </div>
-                    <div
-                        class="px-3 py-2 bg-white rounded-lg shadow-lg flex items-center space-x-2"
-                        title="Change base map style"
-                    >
-                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                            {{__("Language")}}
-                        </span>
-                        <select
-                            v-model="selectedLanguage"
-                            :disabled="isChangingLocale || !mapInstance || languageOptions.length <= 1"
-                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <option
-                                v-for="option in languageOptions"
-                                :key="option.id"
-                                :value="option.id"
-                            >
-                                {{ option.label }}
-                            </option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Map Container - Fits remaining space -->
-                <div class="flex-1 relative bg-gray-100 overflow-hidden">
-                    <div
-                        v-if="!mapInstance"
-                        class="flex items-center justify-center h-full"
-                    >
-                        <div class="text-center">
-                            <div
-                                class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"
-                            ></div>
-                            <p class="text-gray-700">{{__("Loading map...")}}</p>
-                        </div>
-                    </div>
-
-                    <MapView
-                        ref="mapView"
-                        :regions="regions"
-                        :districts="districts"
-                        :selected-region="selectedRegion"
-                        :selected-district="selectedDistrict"
-                        :selected-areas="selectedAreas"
-                        :selected-period="selectedPeriod"
-                        :visible-layers="visibleLayers"
-                        :analysis-trigger="analysisTrigger"
-                        :custom-layers="customLayerDefinitions"
-                        :custom-area-drawing="customAreaDrawing"
-                        @map-ready="handleMapReady"
-                        @statistics-updated="handleStatisticsUpdated"
-                        @district-clicked="handleDistrictClicked"
-                        @region-clicked="handleRegionClicked"
-                        @geojson-loaded="handleGeoJSONLoaded"
-                        @area-toggle-selection="handleAreaToggleSelection"
-                        @area-replace-selection="handleAreaReplaceSelection"
-                        @boundary-violation="handleBoundaryViolation"
-                        @layer-warning="handleLayerWarning"
-                        @custom-polygon-drawn="handleCustomPolygonDrawn"
-                    />
-
-                    <!-- Map Legend -->
-                    <MapLegend
-                        :visible-layers="visibleLayers"
-                        :available-layers="availableLayers"
-                    />
-
-                    <!-- Expand Bottom Panel Button (when collapsed) -->
-                    <button
-                        v-show="!bottomPanelVisible"
-                        @click="bottomPanelVisible = true"
-                        class="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-30 px-4 py-2 bg-white rounded-lg shadow-xl hover:bg-gray-50 flex items-center space-x-2"
-                        title="Show statistics"
-                    >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M5 15l7-7 7 7"
-                            />
-                        </svg>
-                        <span>{{__("Show Statistics & Charts")}}</span>
-                    </button>
-                </div>
-
-                <!-- Bottom Statistics Panel - Fits in flex layout -->
-                <div
-                    v-show="bottomPanelVisible"
-                    :style="{
-                        height: bottomPanelHeight + 'px',
-                        minHeight: '200px',
-                        maxHeight: 'calc(100vh - 100px)',
-                    }"
-                    class="bg-white/95 backdrop-blur-sm border-t border-gray-200 shadow-2xl overflow-hidden flex-shrink-0 flex flex-col relative"
-                >
-                    <!-- Resize Handle -->
-                    <div
-                        class="absolute top-0 left-0 w-full h-1 cursor-row-resize hover:bg-blue-500 bg-gray-300 z-30"
-                        @mousedown="startBottomResize"
-                    ></div>
-
-                    <!-- Collapse Button -->
-                    <button
-                        @click="bottomPanelVisible = false"
-                        class="absolute top-2 right-2 z-30 p-1 rounded hover:bg-gray-100 bg-white shadow"
-                        title="Collapse statistics"
-                    >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M19 9l-7 7-7-7"
-                            />
-                        </svg>
-                    </button>
-
-                    <!-- Scrollable Content Area -->
-                    <div ref="statisticsPanelRef" class="flex-1 overflow-y-auto p-6 pt-8">
-                        <!-- Comprehensive Statistics Panel -->
-                        <StatisticsPanel
-                            :selected-area="selectedArea"
-                            :statistics="statistics"
-                            :area-statistics="areaStatistics"
-                            :time-series-data="timeSeriesData"
-                        />
-
-                        <!-- Erosion Risk Legend -->
-                        <div class="mt-6 border-t pt-4">
-                            <h4 class="text-sm font-bold mb-3 text-gray-700">
-                                {{__("Erosion Risk Classification (RUSLE)")}}
-                            </h4>
-                            <div class="grid grid-cols-5 gap-2 text-xs">
-                                <div class="text-center">
-                                    <div
-                                        class="h-6 rounded mb-1"
-                                        style="
-                                            background-color: rgba(
-                                                34,
-                                                139,
-                                                34,
-                                                0.6
-                                            );
-                                        "
-                                    ></div>
-                                    <div class="font-medium text-green-700">
-                                        {{__("Very Low")}}
-                                    </div>
-                                    <div class="text-gray-600">{{__("0-5 t/ha/yr")}}</div>
-                                </div>
-                                <div class="text-center">
-                                    <div
-                                        class="h-6 rounded mb-1"
-                                        style="
-                                            background-color: rgba(
-                                                255,
-                                                215,
-                                                0,
-                                                0.6
-                                            );
-                                        "
-                                    ></div>
-                                    <div class="font-medium text-yellow-700">
-                                        {{__("Low")}}
-                                    </div>
-                                    <div class="text-gray-600">
-                                        {{__("5-15 t/ha/yr")}}
-                                    </div>
-                                </div>
-                                <div class="text-center">
-                                    <div
-                                        class="h-6 rounded mb-1"
-                                        style="
-                                            background-color: rgba(
-                                                255,
-                                                140,
-                                                0,
-                                                0.6
-                                            );
-                                        "
-                                    ></div>
-                                    <div class="font-medium text-orange-700">
-                                        {{__("Moderate")}}
-                                    </div>
-                                    <div class="text-gray-600">
-                                        {{__("15-30 t/ha/yr")}}
-                                    </div>
-                                </div>
-                                <div class="text-center">
-                                    <div
-                                        class="h-6 rounded mb-1"
-                                        style="
-                                            background-color: rgba(
-                                                220,
-                                                20,
-                                                60,
-                                                0.6
-                                            );
-                                        "
-                                    ></div>
-                                    <div class="font-medium text-red-700">
-                                        {{__("Severe")}}
-                                    </div>
-                                    <div class="text-gray-600">
-                                        {{__("30-50 t/ha/yr")}}
-                                    </div>
-                                </div>
-                                <div class="text-center">
-                                    <div
-                                        class="h-6 rounded mb-1"
-                                        style="
-                                            background-color: rgba(
-                                                139,
-                                                0,
-                                                0,
-                                                0.8
-                                            );
-                                        "
-                                    ></div>
-                                    <div class="font-medium text-red-900">
-                                        {{__("Excessive")}}
-                                    </div>
-                                    <div class="text-gray-600">
-                                        {{__("> 50 t/ha/yr")}}
-                                    </div>
-                                </div>
+                    <!-- Erosion Risk Legend -->
+                    <div class="mt-6 border-t pt-4">
+                        <h4 class="text-sm font-bold mb-3 text-gray-700">
+                            {{ __('Erosion Risk Classification (RUSLE)') }}
+                        </h4>
+                        <div class="grid grid-cols-5 gap-2 text-xs">
+                            <div class="text-center">
+                                <div class="h-6 rounded mb-1" style="background-color: rgba(34, 139, 34, 0.6);"></div>
+                                <div class="font-medium text-green-700">{{ __('Very Low') }}</div>
+                                <div class="text-gray-600">{{ __('0-5 t/ha/yr') }}</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="h-6 rounded mb-1" style="background-color: rgba(255, 215, 0, 0.6);"></div>
+                                <div class="font-medium text-yellow-700">{{ __('Low') }}</div>
+                                <div class="text-gray-600">{{ __('5-15 t/ha/yr') }}</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="h-6 rounded mb-1" style="background-color: rgba(255, 140, 0, 0.6);"></div>
+                                <div class="font-medium text-orange-700">{{ __('Moderate') }}</div>
+                                <div class="text-gray-600">{{ __('15-30 t/ha/yr') }}</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="h-6 rounded mb-1" style="background-color: rgba(220, 20, 60, 0.6);"></div>
+                                <div class="font-medium text-red-700">{{ __('Severe') }}</div>
+                                <div class="text-gray-600">{{ __('30-50 t/ha/yr') }}</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="h-6 rounded mb-1" style="background-color: rgba(139, 0, 0, 0.8);"></div>
+                                <div class="font-medium text-red-900">{{ __('Excessive') }}</div>
+                                <div class="text-gray-600">{{ __('>50 t/ha/yr') }}</div>
                             </div>
                         </div>
                     </div>
@@ -440,7 +294,7 @@ import MapLegend from "@/Components/Map/MapLegend.vue";
 import ProgressBar from "@/Components/UI/ProgressBar.vue";
 import ToastNotification from "@/Components/UI/ToastNotification.vue";
 import { GeoJSONService } from "@/Services/GeoJSONService.js";
-import { DEFAULT_YEAR_PERIOD } from "@/constants/yearPeriods.js";
+import { YEAR_PERIODS, DEFAULT_YEAR_PERIOD, findYearPeriodById } from "@/constants/yearPeriods.js";
 
 // Props
 const props = defineProps({
@@ -457,7 +311,16 @@ const inertiaLocale = computed(() => page.props?.locale || "en");
 const selectedRegion = ref(null);
 const selectedDistrict = ref(null);
 const selectedPeriod = ref({ ...DEFAULT_YEAR_PERIOD });
+const selectedPeriodId = ref(DEFAULT_YEAR_PERIOD.id);
+const yearPeriods = computed(() => YEAR_PERIODS);
 const currentPeriod = computed(() => selectedPeriod.value || DEFAULT_YEAR_PERIOD);
+
+// Handle period selection from dropdown
+const handlePeriodSelectChange = () => {
+    const period = findYearPeriodById(selectedPeriodId.value);
+    selectedPeriod.value = period;
+    handlePeriodChange(period);
+};
 const currentStartYear = computed(() => currentPeriod.value.startYear);
 const currentEndYear = computed(() => currentPeriod.value.endYear);
 const currentPeriodLabel = computed(() => currentPeriod.value.label);
@@ -465,7 +328,7 @@ const selectedArea = ref(null);
 const selectedAreas = ref([]); // Multiple selected areas
 const customAreaDrawing = ref(false);
 const customAreaGeometry = ref(null);
-const visibleLayers = ref([]); // Start with no layers selected (country-wide default)
+const visibleLayers = ref(['erosion']); // Erosion layer always visible by default
 const showLabels = ref(true); // Show map labels by default
 const mapInstance = ref(null);
 const mapView = ref(null);
@@ -498,8 +361,6 @@ const delay = (ms = 0) =>
     });
 
 // Panel state
-const leftSidebarVisible = ref(true);
-const leftSidebarWidth = ref(320);
 const bottomPanelVisible = ref(true);
 const bottomPanelHeight = ref(300);
 
