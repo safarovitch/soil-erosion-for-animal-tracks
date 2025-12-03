@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white rounded-lg shadow-lg p-6">
+  <div class="">
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-bold text-gray-900">
         {{ __("Detailed Statistics") }}

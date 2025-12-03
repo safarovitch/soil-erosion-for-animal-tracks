@@ -71,7 +71,7 @@ class ErosionTileController extends Controller
 
         $validated = $request->validate([
             'area_type' => 'required|in:region,district,custom',
-            'area_id' => 'required_if:area_type,region,district|integer',
+            'area_id' => 'required_if:area_type,region,district|nullable|integer',
             'geometry' => 'required_if:area_type,custom|array',
             'start_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",
             'end_year' => "sometimes|integer|min:{$minYear}|max:{$maxYear}",

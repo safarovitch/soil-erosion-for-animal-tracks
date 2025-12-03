@@ -393,8 +393,34 @@ class GEEService:
         is_complex = coord_count > Config.COMPLEX_GEOMETRY_THRESHOLD
         
         # Recommend processing parameters based on complexity
-        # All calculations use 1000m (1km) resolution
-        if is_large_area and is_complex:
+        # Adaptive resolution based on area size
+        # For very small areas (<1 km²), use finer resolution to ensure data coverage
+        is_very_small = area_km2 < 1
+        is_small = area_km2 < 10
+        
+        if is_very_small:
+            # Very small area: use 100m resolution
+            recommended = {
+                'simplify_tolerance': 50,    # 50m
+                'rusle_scale': 100,          # 100m
+                'sample_scale': 100,         # 100m
+                'grid_size': 50,             # 50x50 grid
+                'max_samples': 2500,
+                'batch_size': 100,
+                'max_workers': 4
+            }
+        elif is_small and not is_complex:
+            # Small area (<10 km²): use 250m resolution
+            recommended = {
+                'simplify_tolerance': 100,   # 100m
+                'rusle_scale': 250,          # 250m
+                'sample_scale': 250,         # 250m
+                'grid_size': 50,             # 50x50 grid
+                'max_samples': 2500,
+                'batch_size': 100,
+                'max_workers': 4
+            }
+        elif is_large_area and is_complex:
             # Very complex: Tajikistan-sized MultiPolygon
             recommended = {
                 'simplify_tolerance': 2000,  # 2km
@@ -409,10 +435,10 @@ class GEEService:
             # Complex but smaller
             recommended = {
                 'simplify_tolerance': 1000,  # 1km
-                'rusle_scale': 1000,          # 1000m (1km)
-                'sample_scale': 1000,         # 1000m (1km)
-                'grid_size': 7,              # 7x7 grid
-                'max_samples': 49,
+                'rusle_scale': 500,           # 500m
+                'sample_scale': 500,          # 500m
+                'grid_size': 20,             # 20x20 grid
+                'max_samples': 400,
                 'batch_size': 50,
                 'max_workers': 6
             }
@@ -422,20 +448,20 @@ class GEEService:
                 'simplify_tolerance': 1000,  # 1km
                 'rusle_scale': 1000,          # 1000m (1km)
                 'sample_scale': 1000,         # 1000m (1km)
-                'grid_size': 7,              # 7x7 grid
-                'max_samples': 50,
+                'grid_size': 10,             # 10x10 grid
+                'max_samples': 100,
                 'batch_size': 50,
                 'max_workers': 6
             }
         else:
-            # Small and simple: use 1km resolution
+            # Medium area: use 500m resolution
             recommended = {
                 'simplify_tolerance': 500,   # 500m
-                'rusle_scale': 1000,          # 1000m (1km)
-                'sample_scale': 1000,        # 1000m (1km)
-                'grid_size': 10,             # 10x10 grid
-                'max_samples': 100,
-                'batch_size': 30,
+                'rusle_scale': 500,          # 500m
+                'sample_scale': 500,         # 500m
+                'grid_size': 30,             # 30x30 grid
+                'max_samples': 900,
+                'batch_size': 50,
                 'max_workers': 4
             }
         

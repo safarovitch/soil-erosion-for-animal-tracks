@@ -3,6 +3,7 @@
 use App\Http\Controllers\ErosionController;
 use App\Http\Controllers\ErosionTileController;
 use App\Http\Controllers\Admin\DatasetController;
+use App\Http\Controllers\Api\RoadController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
@@ -118,6 +119,13 @@ Route::prefix('erosion')->group(function () {
 Route::middleware(['auth:sanctum', 'role:admin'])->get('/datasets', [DatasetController::class, 'getAvailable']);
 Route::get('/datasets/{dataset}/tiles/{z}/{x}/{y}.png', [DatasetController::class, 'serveTiles'])
     ->name('api.datasets.tiles');
+
+// Roads data for erosion analysis
+Route::prefix('roads')->group(function () {
+    Route::get('/', [RoadController::class, 'index']);
+    Route::get('/filters', [RoadController::class, 'filters']);
+    Route::post('/buffered', [RoadController::class, 'buffered']);
+});
 
 /*
 |--------------------------------------------------------------------------

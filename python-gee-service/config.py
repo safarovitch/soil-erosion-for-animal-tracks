@@ -38,16 +38,17 @@ class Config:
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     
     # Redis Configuration
+    # Use DB 2 for soil-erosion project to avoid conflicts with other projects
     REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
     REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-    REDIS_DB = int(os.getenv('REDIS_DB', 0))
+    REDIS_DB = int(os.getenv('REDIS_DB', 2))
     
     # Storage paths
-    STORAGE_PATH = os.getenv('STORAGE_PATH', '/var/www/rusle-icarda/storage/rusle-tiles')
+    STORAGE_PATH = os.getenv('STORAGE_PATH', '/var/www/soil-erosion/storage/rusle-tiles')
     
     # Laravel callback configuration
-    LARAVEL_BASE_URL = os.getenv('LARAVEL_BASE_URL', 'https://soil-erosion-tjk.wyzo.app')
-    LARAVEL_HOST_HEADER = os.getenv('LARAVEL_HOST_HEADER', 'soil-erosion-tjk.wyzo.app')
+    LARAVEL_BASE_URL = os.getenv('LARAVEL_BASE_URL', 'https://soil-erosion.wyzo.ai')
+    LARAVEL_HOST_HEADER = os.getenv('LARAVEL_HOST_HEADER', 'soil-erosion.wyzo.ai')
     LARAVEL_VERIFY_TLS = os.getenv('LARAVEL_VERIFY_TLS', 'true').lower() != 'false'
     
     # Performance tuning constants

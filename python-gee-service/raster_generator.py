@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class ErosionRasterGenerator:
     """Generate GeoTIFF rasters from RUSLE computations"""
     
-    def __init__(self, storage_path='/var/www/rusle-icarda/storage/rusle-tiles', rusle_config=None):
+    def __init__(self, storage_path='/var/www/soil-erosion/storage/rusle-tiles', rusle_config=None):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         if isinstance(rusle_config, RUSLEConfig):

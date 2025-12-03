@@ -23,125 +23,231 @@
         </div>
 
         <!-- Horizontal Toolbar -->
-        <div class="bg-white border-b border-gray-200 shadow-sm px-4 py-2 flex items-center justify-between gap-4 flex-shrink-0 z-40">
-            <!-- Left Section: Custom Area & Year Range -->
-            <div class="flex items-center gap-3">
-                <!-- Custom Area Button -->
-                <button
-                    type="button"
-                    @click="handleCustomAreaToggle(!customAreaDrawing)"
-                    :class="[
-                        'px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center gap-2',
-                        customAreaDrawing
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
-                    ]"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l11.563-11.563z" />
-                    </svg>
-                    <span>{{ customAreaDrawing ? __('Drawing...') : __('Draw Area') }}</span>
-                </button>
-
-                <!-- Year Range Selector -->
-                <div class="flex items-center gap-2">
-                    <label class="text-sm font-medium text-gray-600">{{ __('Period') }}:</label>
-                    <select
-                        v-model="selectedPeriodId"
-                        @change="handlePeriodSelectChange"
-                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white min-w-[160px]"
-                    >
-                        <option
-                            v-for="period in yearPeriods"
-                            :key="period.id"
-                            :value="period.id"
+        <div class="bg-white border-b border-gray-200 shadow-sm flex-shrink-0 z-40">
+            <!-- Row 1: Main Controls -->
+            <div class="px-4 py-2 flex items-center justify-between gap-4">
+                <!-- Left Section: Area Selection Mode -->
+                <div class="flex items-center gap-3">
+                    <!-- Selection Mode Toggle -->
+                    <div class="flex items-center bg-gray-100 rounded-lg p-1">
+                        <button
+                            type="button"
+                            @click="setSelectionMode('draw')"
+                            :class="[
+                                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 flex items-center gap-2',
+                                selectionMode === 'draw'
+                                    ? 'bg-white text-blue-600 shadow-sm'
+                                    : 'text-gray-600 hover:text-gray-800'
+                            ]"
                         >
-                            {{ period.label }}
-                        </option>
-                    </select>
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l11.563-11.563z" />
+                            </svg>
+                            {{ __('Draw Area') }}
+                        </button>
+                        <button
+                            type="button"
+                            @click="setSelectionMode('roads')"
+                            :class="[
+                                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-200 flex items-center gap-2',
+                                selectionMode === 'roads'
+                                    ? 'bg-white text-blue-600 shadow-sm'
+                                    : 'text-gray-600 hover:text-gray-800'
+                            ]"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z" />
+                            </svg>
+                            {{ __('Roads') }}
+                        </button>
+                    </div>
+
+                    <!-- Draw Mode: Start Drawing Button -->
+                    <button
+                        v-if="selectionMode === 'draw'"
+                        type="button"
+                        @click="handleCustomAreaToggle(!customAreaDrawing)"
+                        :class="[
+                            'px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200 flex items-center gap-2',
+                            customAreaDrawing
+                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                        ]"
+                    >
+                        <span>{{ customAreaDrawing ? __('Drawing...') : __('Start Drawing') }}</span>
+                    </button>
+
+                    <!-- Year Range Selector -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-600">{{ __('Period') }}:</label>
+                        <select
+                            v-model="selectedPeriodId"
+                            @change="handlePeriodSelectChange"
+                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white min-w-[160px]"
+                        >
+                            <option
+                                v-for="period in yearPeriods"
+                                :key="period.id"
+                                :value="period.id"
+                            >
+                                {{ period.label }}
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Center Section: Action Buttons -->
+                <div class="flex items-center gap-2">
+                    <button
+                        @click="applySelection"
+                        :disabled="!canApply"
+                        class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
+                        :class="[
+                            canApply
+                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        ]"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                        {{ __('Apply') }}
+                    </button>
+                    <button
+                        @click="clearSelection"
+                        class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 flex items-center gap-2"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        {{ __('Clear') }}
+                    </button>
+                    <button
+                        @click="exportStatisticsReport"
+                        :disabled="isExporting || !hasStatistics"
+                        class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
+                        :class="[
+                            hasStatistics && !isExporting
+                                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        ]"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                        </svg>
+                        <span v-if="isExporting">{{ __('Exporting...') }}</span>
+                        <span v-else>{{ __('Export PDF') }}</span>
+                    </button>
+                </div>
+
+                <!-- Right Section: Map & Language -->
+                <div class="flex items-center gap-3">
+                    <!-- Map Style Selector -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-600">{{ __('Map') }}:</label>
+                        <select
+                            v-model="selectedBaseMapType"
+                            :disabled="!mapInstance || baseMapOptions.length <= 1"
+                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                        >
+                            <option
+                                v-for="option in baseMapOptions"
+                                :key="option.id"
+                                :value="option.id"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </div>
+
+                    <!-- Language Selector -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-gray-600">{{ __('Lang') }}:</label>
+                        <select
+                            v-model="selectedLanguage"
+                            :disabled="isChangingLocale || !mapInstance || languageOptions.length <= 1"
+                            class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                        >
+                            <option
+                                v-for="option in languageOptions"
+                                :key="option.id"
+                                :value="option.id"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
-            <!-- Center Section: Action Buttons -->
-            <div class="flex items-center gap-2">
-                <button
-                    @click="applySelection"
-                    :disabled="!canApply"
-                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
-                    :class="[
-                        canApply
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    ]"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    {{ __('Apply') }}
-                </button>
-                <button
-                    @click="clearSelection"
-                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 flex items-center gap-2"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    {{ __('Clear') }}
-                </button>
-                <button
-                    @click="exportStatisticsReport"
-                    :disabled="isExporting || !hasStatistics"
-                    class="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
-                    :class="[
-                        hasStatistics && !isExporting
-                            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    ]"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                    </svg>
-                    <span v-if="isExporting">{{ __('Exporting...') }}</span>
-                    <span v-else>{{ __('Export PDF') }}</span>
-                </button>
-            </div>
-
-            <!-- Right Section: Map & Language -->
-            <div class="flex items-center gap-3">
-                <!-- Map Style Selector -->
+            <!-- Row 2: Road Selection Filters (shown when roads mode is active) -->
+            <div 
+                v-if="selectionMode === 'roads'" 
+                class="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center gap-4"
+            >
+                <span class="text-sm font-medium text-gray-600">{{ __('Road Filters') }}:</span>
+                
+                <!-- Highway Type -->
                 <div class="flex items-center gap-2">
-                    <label class="text-sm font-medium text-gray-600">{{ __('Map') }}:</label>
+                    <label class="text-xs text-gray-500">{{ __('Type') }}:</label>
                     <select
-                        v-model="selectedBaseMapType"
-                        :disabled="!mapInstance || baseMapOptions.length <= 1"
-                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                        v-model="roadFilters.highwayType"
+                        @change="onRoadFiltersChange"
+                        class="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     >
-                        <option
-                            v-for="option in baseMapOptions"
-                            :key="option.id"
-                            :value="option.id"
-                        >
-                            {{ option.label }}
+                        <option value="all">{{ __('All Types') }}</option>
+                        <option v-for="type in roadFilterOptions.highwayTypes" :key="type" :value="type">
+                            {{ formatHighwayType(type) }}
                         </option>
                     </select>
                 </div>
 
-                <!-- Language Selector -->
+                <!-- Surface Type -->
                 <div class="flex items-center gap-2">
-                    <label class="text-sm font-medium text-gray-600">{{ __('Lang') }}:</label>
+                    <label class="text-xs text-gray-500">{{ __('Surface') }}:</label>
                     <select
-                        v-model="selectedLanguage"
-                        :disabled="isChangingLocale || !mapInstance || languageOptions.length <= 1"
-                        class="text-sm font-medium text-gray-700 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:opacity-50"
+                        v-model="roadFilters.surfaceType"
+                        @change="onRoadFiltersChange"
+                        class="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                     >
-                        <option
-                            v-for="option in languageOptions"
-                            :key="option.id"
-                            :value="option.id"
-                        >
-                            {{ option.label }}
+                        <option value="all">{{ __('All Surfaces') }}</option>
+                        <option v-for="type in roadFilterOptions.surfaceTypes" :key="type" :value="type">
+                            {{ formatSurfaceType(type) }}
                         </option>
                     </select>
+                </div>
+
+                <!-- Buffer Distance -->
+                <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-500">{{ __('Buffer') }}:</label>
+                    <select
+                        v-model="roadFilters.bufferDistance"
+                        @change="onRoadFiltersChange"
+                        class="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    >
+                        <option v-for="dist in roadFilterOptions.bufferDistances" :key="dist" :value="dist">
+                            {{ dist }}m
+                        </option>
+                    </select>
+                </div>
+
+                <!-- Road Count -->
+                <div class="flex items-center gap-2 ml-auto">
+                    <span class="text-sm text-gray-600">
+                        <span class="font-medium">{{ filteredRoadCount }}</span> {{ __('roads selected') }}
+                    </span>
+                    <button
+                        v-if="filteredRoadCount > 0"
+                        @click="toggleRoadsVisibility"
+                        :class="[
+                            'px-2 py-1 text-xs rounded transition-colors',
+                            showRoadsOnMap
+                                ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                        ]"
+                    >
+                        {{ showRoadsOnMap ? __('Hide on Map') : __('Show on Map') }}
+                    </button>
                 </div>
             </div>
         </div>
@@ -240,40 +346,6 @@
                         :area-statistics="areaStatistics"
                         :time-series-data="timeSeriesData"
                     />
-
-                    <!-- Erosion Risk Legend -->
-                    <div class="mt-6 border-t pt-4">
-                        <h4 class="text-sm font-bold mb-3 text-gray-700">
-                            {{ __('Erosion Risk Classification (RUSLE)') }}
-                        </h4>
-                        <div class="grid grid-cols-5 gap-2 text-xs">
-                            <div class="text-center">
-                                <div class="h-6 rounded mb-1" style="background-color: rgba(34, 139, 34, 0.6);"></div>
-                                <div class="font-medium text-green-700">{{ __('Very Low') }}</div>
-                                <div class="text-gray-600">{{ __('0-5 t/ha/yr') }}</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="h-6 rounded mb-1" style="background-color: rgba(255, 215, 0, 0.6);"></div>
-                                <div class="font-medium text-yellow-700">{{ __('Low') }}</div>
-                                <div class="text-gray-600">{{ __('5-15 t/ha/yr') }}</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="h-6 rounded mb-1" style="background-color: rgba(255, 140, 0, 0.6);"></div>
-                                <div class="font-medium text-orange-700">{{ __('Moderate') }}</div>
-                                <div class="text-gray-600">{{ __('15-30 t/ha/yr') }}</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="h-6 rounded mb-1" style="background-color: rgba(220, 20, 60, 0.6);"></div>
-                                <div class="font-medium text-red-700">{{ __('Severe') }}</div>
-                                <div class="text-gray-600">{{ __('30-50 t/ha/yr') }}</div>
-                            </div>
-                            <div class="text-center">
-                                <div class="h-6 rounded mb-1" style="background-color: rgba(139, 0, 0, 0.8);"></div>
-                                <div class="font-medium text-red-900">{{ __('Excessive') }}</div>
-                                <div class="text-gray-600">{{ __('>50 t/ha/yr') }}</div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -295,6 +367,12 @@ import ProgressBar from "@/Components/UI/ProgressBar.vue";
 import ToastNotification from "@/Components/UI/ToastNotification.vue";
 import { GeoJSONService } from "@/Services/GeoJSONService.js";
 import { YEAR_PERIODS, DEFAULT_YEAR_PERIOD, findYearPeriodById } from "@/constants/yearPeriods.js";
+
+// OpenLayers imports for roads layer
+import VectorLayer from 'ol/layer/Vector';
+import VectorSource from 'ol/source/Vector';
+import { GeoJSON } from 'ol/format';
+import { Style, Stroke } from 'ol/style';
 
 // Props
 const props = defineProps({
@@ -350,6 +428,26 @@ const showLogin = ref(false);
 const loginLoading = ref(false);
 const analysisTrigger = ref(0);
 const needsApply = ref(true);
+
+// Selection mode: 'draw' for custom area drawing, 'roads' for road selection
+const selectionMode = ref('draw');
+
+// Road selection state
+const roadFilters = ref({
+    highwayType: 'all',
+    surfaceType: 'all',
+    bufferDistance: 100
+});
+const roadFilterOptions = ref({
+    highwayTypes: ['trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link'],
+    surfaceTypes: ['asphalt', 'paved', 'unpaved', 'gravel', 'dirt', 'ground', 'concrete'],
+    bufferDistances: [50, 100, 200, 500]
+});
+const roadsData = ref(null);
+const filteredRoadCount = ref(0);
+const showRoadsOnMap = ref(true);
+const roadsLayerAdded = ref(false);
+const roadsLayer = ref(null); // OpenLayers VectorLayer for roads
 
 // Toast notifications (stacked)
 const toasts = ref([]);
@@ -488,7 +586,14 @@ watch(
 );
 
 
-const canApply = computed(() => selectedAreas.value.length > 0 && !loading.value);
+const canApply = computed(() => {
+    // In roads mode, can apply if there are filtered roads
+    if (selectionMode.value === 'roads') {
+        return filteredRoadCount.value > 0 && !loading.value;
+    }
+    // In draw mode, can apply if there are selected areas
+    return selectedAreas.value.length > 0 && !loading.value;
+});
 
 // Login form
 const loginForm = reactive({
@@ -747,6 +852,37 @@ const markAnalysisDirty = () => {
 
 const applySelection = async () => {
     let areasToApply = selectedAreas.value;
+
+    // Handle roads mode - get buffered roads as geometry
+    if (selectionMode.value === 'roads' && filteredRoadCount.value > 0) {
+        try {
+            loading.value = true;
+            loadingMessage.value = __('Getting road corridors...');
+            
+            const bufferedRoads = await getBufferedRoadsGeometry();
+            
+            if (bufferedRoads && bufferedRoads.geometry) {
+                // Create a custom area from buffered roads
+                const roadArea = {
+                    id: 'roads-' + Date.now(),
+                    type: 'custom',
+                    area_type: 'custom',
+                    name_en: `Road Corridors (${roadFilters.value.bufferDistance}m buffer)`,
+                    name_tj: `Роҳҳо (${roadFilters.value.bufferDistance}м буфер)`,
+                    name_ru: `Дорожные коридоры (${roadFilters.value.bufferDistance}м буфер)`,
+                    geometry: bufferedRoads.geometry,
+                    properties: bufferedRoads.properties
+                };
+                
+                areasToApply = [roadArea];
+                selectedAreas.value = areasToApply;
+            }
+        } catch (error) {
+            showToast('error', __('Error'), error.message || __('Failed to process road selection'));
+            loading.value = false;
+            return;
+        }
+    }
 
     if (mapView.value && selectedAreas.value.length > 0) {
         const countryBoundary = mapView.value.getCountryBoundary?.();
@@ -1450,7 +1586,185 @@ const clearSelection = () => {
     // Hide bottom panel if visible
     bottomPanelVisible.value = false;
     
+    // Clear roads layer
+    removeRoadsFromMap();
+    
     console.log('All selections cleared');
+};
+
+// Road Selection Functions
+const setSelectionMode = (mode) => {
+    selectionMode.value = mode;
+    if (mode === 'roads') {
+        // Load roads when switching to roads mode
+        loadRoadsData();
+    } else {
+        // Hide roads when switching to draw mode
+        removeRoadsFromMap();
+    }
+};
+
+const loadRoadsData = async () => {
+    try {
+        const params = new URLSearchParams();
+        if (roadFilters.value.highwayType !== 'all') {
+            params.append('highway_type', roadFilters.value.highwayType);
+        }
+        if (roadFilters.value.surfaceType !== 'all') {
+            params.append('surface_type', roadFilters.value.surfaceType);
+        }
+        
+        const response = await fetch(`/api/roads?${params.toString()}`);
+        if (!response.ok) {
+            throw new Error('Failed to load roads data');
+        }
+        
+        const data = await response.json();
+        roadsData.value = data;
+        filteredRoadCount.value = data.features?.length || 0;
+        
+        // Update roads on map
+        if (showRoadsOnMap.value) {
+            updateRoadsOnMap();
+        }
+    } catch (error) {
+        console.error('Error loading roads:', error);
+        showToast('error', __('Error'), __('Failed to load roads data'));
+    }
+};
+
+const onRoadFiltersChange = () => {
+    loadRoadsData();
+};
+
+const toggleRoadsVisibility = () => {
+    showRoadsOnMap.value = !showRoadsOnMap.value;
+    if (showRoadsOnMap.value) {
+        updateRoadsOnMap();
+    } else {
+        removeRoadsFromMap();
+    }
+};
+
+const updateRoadsOnMap = () => {
+    try {
+        // mapView.value.map is a ref, so we need .value to get the actual OpenLayers map
+        const mapObj = mapView.value?.map?.value || mapView.value?.map;
+        if (!mapObj || !roadsData.value) {
+            console.log('Map or roads data not ready yet');
+            return;
+        }
+        
+        // Remove existing roads layer if present
+        if (roadsLayer.value) {
+            mapObj.removeLayer(roadsLayer.value);
+            roadsLayer.value = null;
+        }
+        
+        // Create vector source from GeoJSON
+        const vectorSource = new VectorSource({
+            features: new GeoJSON().readFeatures(roadsData.value, {
+                featureProjection: 'EPSG:3857' // Web Mercator projection used by OpenLayers
+            })
+        });
+        
+        // Create vector layer with orange line style
+        roadsLayer.value = new VectorLayer({
+            source: vectorSource,
+            style: new Style({
+                stroke: new Stroke({
+                    color: '#e67e22',
+                    width: 3
+                })
+            }),
+            zIndex: 100 // Ensure roads are on top
+        });
+        
+        // Add layer to map
+        mapObj.addLayer(roadsLayer.value);
+        roadsLayerAdded.value = true;
+        console.log('Roads layer added successfully');
+    } catch (error) {
+        console.error('Error updating roads on map:', error);
+    }
+};
+
+const removeRoadsFromMap = () => {
+    const mapObj = mapView.value?.map?.value || mapView.value?.map;
+    if (!mapObj || !roadsLayer.value) return;
+    
+    mapObj.removeLayer(roadsLayer.value);
+    roadsLayer.value = null;
+    roadsLayerAdded.value = false;
+};
+
+const getBufferedRoadsGeometry = async () => {
+    try {
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+        
+        const response = await fetch('/api/roads/buffered', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                buffer_distance: roadFilters.value.bufferDistance,
+                highway_type: roadFilters.value.highwayType,
+                surface_type: roadFilters.value.surfaceType
+            }),
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            let errorMessage = 'Failed to get buffered roads';
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.error || errorMessage;
+            } catch (e) {
+                // Response body might be empty
+            }
+            throw new Error(errorMessage);
+        }
+        
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            throw new Error('Request timed out. Please select fewer roads using filters.');
+        }
+        console.error('Error getting buffered roads:', error);
+        throw error;
+    }
+};
+
+const formatHighwayType = (type) => {
+    const labels = {
+        'trunk': __('Trunk Road'),
+        'trunk_link': __('Trunk Link'),
+        'primary': __('Primary Road'),
+        'primary_link': __('Primary Link'),
+        'secondary': __('Secondary Road'),
+        'secondary_link': __('Secondary Link')
+    };
+    return labels[type] || type;
+};
+
+const formatSurfaceType = (type) => {
+    const labels = {
+        'asphalt': __('Asphalt'),
+        'paved': __('Paved'),
+        'unpaved': __('Unpaved'),
+        'gravel': __('Gravel'),
+        'dirt': __('Dirt'),
+        'ground': __('Ground'),
+        'concrete': __('Concrete')
+    };
+    return labels[type] || type;
 };
 
 const handleMapReady = (map) => {
@@ -1594,6 +1908,9 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
         if (area.area_type === "country" || area.id === 0) {
             areaType = "country";
             areaId = 0;
+        } else if (area.area_type === "custom" || area.type === "custom") {
+            areaType = "custom";
+            areaId = 0; // Custom areas use 0 as ID
         } else if (area.region_id) {
             areaType = "district";
         } else {
@@ -1609,17 +1926,69 @@ const loadAreaStatistics = async (area, index = 0, total = 1) => {
 
         if (areaType !== "country") {
             try {
+                const availabilityPayload = {
+                    area_type: areaType,
+                    area_id: areaId,
+                    start_year: startYear,
+                    end_year: endYear,
+                };
+                
+                // Include geometry for custom areas
+                if (areaType === "custom" && area.geometry) {
+                    availabilityPayload.geometry = area.geometry;
+                }
+                
                 const availabilityResponse = await axios.post(
                     "/api/erosion/check-availability",
-                    {
-                        area_type: areaType,
-                        area_id: areaId,
-                        start_year: startYear,
-                        end_year: endYear,
-                    }
+                    availabilityPayload
                 );
 
-                const availability = availabilityResponse.data || {};
+                let availability = availabilityResponse.data || {};
+
+                // If queued or processing, poll for completion instead of falling back to /compute
+                if (availability.status === "queued" || availability.status === "processing") {
+                    const taskId = availability.task_id;
+                    if (taskId) {
+                        loadingMessage.value = `${__("Computing erosion statistics")} (${index + 1}/${total})...`;
+                        
+                        // Poll for task completion (max 45 minutes with 3-minute intervals)
+                        const pollIntervalMs = 3 * 60 * 1000; // 3 minutes
+                        const maxAttempts = 15; // 15 attempts * 3 minutes = 45 minutes
+                        let attempts = 0;
+                        
+                        while (attempts < maxAttempts) {
+                            await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                            attempts++;
+                            
+                            try {
+                                const statusResponse = await axios.get(`/api/erosion/task-status/${taskId}`);
+                                const status = statusResponse.data || {};
+                                
+                                if (status.status === "completed" || status.status === "available") {
+                                    // Re-check availability to get statistics
+                                    const recheckResponse = await axios.post(
+                                        "/api/erosion/check-availability",
+                                        availabilityPayload
+                                    );
+                                    availability = recheckResponse.data || {};
+                                    break;
+                                } else if (status.status === "failed") {
+                                    console.error(__("Task failed:"), status.error);
+                                    throw new Error(status.error || __("Computation failed"));
+                                }
+                                
+                                const elapsedMinutes = attempts * 3;
+                                loadingMessage.value = `${__("Computing erosion statistics")} (${index + 1}/${total})... ${elapsedMinutes} ${__("min")}`;
+                            } catch (pollError) {
+                                console.warn(__("Polling error:"), pollError);
+                            }
+                        }
+                        
+                        if (attempts >= maxAttempts && availability.status !== "available") {
+                            throw new Error(__("Computation timed out. Please try again later."));
+                        }
+                    }
+                }
 
                 if (
                     availability.status === "available" &&

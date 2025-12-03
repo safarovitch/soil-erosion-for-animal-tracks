@@ -86,6 +86,25 @@ show_status() {
         echo PHP_EOL;
     }
     
+    // Check for stuck queued tasks (older than 5 minutes)
+    \$stuckQueued = \App\Models\PrecomputedErosionMap::where('status', 'queued')
+        ->where('created_at', '<', now()->subMinutes(5))
+        ->orderBy('created_at', 'asc')
+        ->get();
+    
+    if (\$stuckQueued->count() > 0) {
+        echo '⚠️  STUCK QUEUED TASKS (older than 5 min):' . PHP_EOL;
+        echo '────────────────────────────────────────' . PHP_EOL;
+        foreach (\$stuckQueued as \$map) {
+            \$age = \$map->created_at->diffInMinutes(now());
+            \$taskId = \$map->metadata['task_id'] ?? 'N/A';
+            echo '  • ' . ucfirst(\$map->area_type) . ' ' . \$map->area_id . ', period ' . (\$map->metadata['period']['label'] ?? \$map->year);
+            echo ' (queued ' . \$age . ' min ago, task_id: ' . substr(\$taskId, 0, 8) . '...)' . PHP_EOL;
+        }
+        echo PHP_EOL;
+        echo '💡 Run ./requeue-stuck-tasks.php to re-queue these tasks' . PHP_EOL . PHP_EOL;
+    }
+    
     if (\App\Models\PrecomputedErosionMap::where('status', 'failed')->exists()) {
         echo '❌ FAILED TASKS:' . PHP_EOL;
         echo '────────────────────────────────────────' . PHP_EOL;
@@ -94,7 +113,12 @@ show_status() {
             ->limit(3)
             ->get();
         foreach (\$failed as \$map) {
-            echo '  • ' . ucfirst(\$map->area_type) . ' ' . \$map->area_id . ', year ' . \$map->year . PHP_EOL;
+            echo '  • ' . ucfirst(\$map->area_type) . ' ' . \$map->area_id . ', year ' . \$map->year;
+            if (\$map->error_message) {
+                echo ' - ' . substr(\$map->error_message, 0, 50) . '...' . PHP_EOL;
+            } else {
+                echo PHP_EOL;
+            }
         }
         echo PHP_EOL;
     }

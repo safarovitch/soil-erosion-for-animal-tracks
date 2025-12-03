@@ -118,7 +118,8 @@ class PrecomputedErosionMap extends Model
     public function getTileUrlAttribute(): string
     {
         // Generate URL pattern manually with placeholders
-        $baseUrl = url('/api/erosion/tiles');
+        // Force HTTPS to avoid mixed content issues
+        $baseUrl = config('app.url') . '/api/erosion/tiles';
         $period = $this->period_label;
         return "{$baseUrl}/{$this->area_type}/{$this->tile_storage_key}/{$period}/{z}/{x}/{y}.png";
     }

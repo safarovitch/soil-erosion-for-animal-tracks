@@ -1232,7 +1232,7 @@ const loadDetailedErosionData = async (area) => {
                 area,
                 resolvedLayerKey,
                 areaType,
-                areaId,
+                areaType === "custom" ? 0 : areaId,
                 areaType === "custom" ? requestPayload.geometry : null
             );
             

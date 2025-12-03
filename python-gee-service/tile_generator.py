@@ -17,11 +17,11 @@ DEFAULT_ZOOM_LEVELS = [6, 7, 8, 9, 10, 11, 12]
 class MapTileGenerator:
     """Generate XYZ map tiles from erosion rasters"""
     
-    def __init__(self, storage_path='/var/www/rusle-icarda/storage/rusle-tiles'):
+    def __init__(self, storage_path='../storage/rusle-tiles'):
         self.storage_path = Path(storage_path)
         self.tile_size = 256
         
-        def generate_tiles(self, geotiff_path, area_type, area_id, year, zoom_levels=None, geometry_json=None, end_year=None, storage_key=None):
+    def generate_tiles(self, geotiff_path, area_type, area_id, year, zoom_levels=None, geometry_json=None, end_year=None, storage_key=None):
         """
         Generate XYZ map tiles from GeoTIFF or sampled data
         

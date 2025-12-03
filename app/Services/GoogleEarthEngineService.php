@@ -295,20 +295,22 @@ class GoogleEarthEngineService
             }
 
             $data = $result['data'];
+            $soilErosion = $data['soil_erosion'] ?? [];
+            $factors = $data['factors'] ?? [];
 
             // Build statistics response similar to computeSingleAreaStatistics
             $statistics = [
-                'mean_erosion_rate' => $data['statistics']['mean'] ?? 0,
-                'min_erosion_rate' => $data['statistics']['min'] ?? 0,
-                'max_erosion_rate' => $data['statistics']['max'] ?? 0,
-                'erosion_cv' => $data['statistics']['std_dev'] ?? 0,
-                'severity_distribution' => $data['severity_breakdown'] ?? [],
+                'mean_erosion_rate' => $soilErosion['mean'] ?? 0,
+                'min_erosion_rate' => $soilErosion['min'] ?? 0,
+                'max_erosion_rate' => $soilErosion['max'] ?? 0,
+                'erosion_cv' => $soilErosion['std_dev'] ?? 0,
+                'severity_distribution' => $soilErosion['severity_distribution'] ?? [],
                 'rusle_factors' => [
-                    'r_factor' => $data['factors']['r'] ?? null,
-                    'k_factor' => $data['factors']['k'] ?? null,
-                    'ls_factor' => $data['factors']['ls'] ?? null,
-                    'c_factor' => $data['factors']['c'] ?? null,
-                    'p_factor' => $data['factors']['p'] ?? null,
+                    'r' => $factors['r']['mean'] ?? null,
+                    'k' => $factors['k']['mean'] ?? null,
+                    'ls' => $factors['ls']['mean'] ?? null,
+                    'c' => $factors['c']['mean'] ?? null,
+                    'p' => $factors['p']['mean'] ?? null,
                 ],
             ];
 
